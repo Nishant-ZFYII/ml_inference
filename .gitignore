@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Data (downloaded at runtime)
+data/
+corridor_data/
+
+# Training outputs
+checkpoints/
+exported/
+runs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SLURM logs
+*.out
+*.err
+
+# HuggingFace cache
+.cache/
