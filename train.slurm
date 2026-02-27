@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32GB
 #SBATCH --account=torch_pr_742_general
-#SBATCH --partition=h100
-#SBATCH --gres=gpu:h100:1
+#SBATCH --partition=l40s_public
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --time=12:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
@@ -14,10 +14,8 @@
 # ============================================================================
 # Student Model Training on NYU Torch HPC
 #
-# Available GPUs (sinfo): H200, H100, L40S, RTX6000
-# Using H100 (80GB VRAM). Alternatives:
-#   --partition=l40s  --gres=gpu:l40s:1   (48GB, likely shorter queue)
-#   --partition=h200  --gres=gpu:h200:1   (141GB, may have longer queue)
+# Using L40S public partition (48GB VRAM, sufficient for student training).
+# Request tandon_advanced allocation at projects.hpc.nyu.edu for H100/H200 access.
 # ============================================================================
 
 set -euo pipefail

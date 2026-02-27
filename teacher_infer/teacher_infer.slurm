@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
 #SBATCH --account=torch_pr_742_general
-#SBATCH --partition=h100
-#SBATCH --gres=gpu:h100:1
+#SBATCH --partition=l40s_public
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --time=08:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
@@ -14,9 +14,8 @@
 # ============================================================================
 # Teacher Inference: DA2-Large + YOLO+SAM2 on NYU val set
 #
-# Uses H100 (80GB) — teacher models are memory-hungry.
-# H200 also works: --partition=h200 --gres=gpu:h200:1
-# L40S (48GB) may be tight with DA2-Large + SAM2 + YOLO loaded together.
+# Using L40S public partition (48GB VRAM).
+# If OOM with DA2+SAM2+YOLO together, request tandon_advanced for H100/H200.
 # ============================================================================
 
 set -euo pipefail
