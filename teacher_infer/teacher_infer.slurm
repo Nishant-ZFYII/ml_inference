@@ -4,7 +4,8 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
-#SBATCH --gres=gpu:a100:1
+#SBATCH --partition=h100
+#SBATCH --gres=gpu:h100:1
 #SBATCH --time=08:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
@@ -12,10 +13,9 @@
 # ============================================================================
 # Teacher Inference: DA2-Large + YOLO+SAM2 on NYU val set
 #
-# BEFORE FIRST SUBMISSION:
-#   1. Run `sinfo` to verify partition names and GPU spec strings
-#   2. Update --gres and add --partition accordingly
-#   3. Set up conda env (see setup_hpc.sh or README.md)
+# Uses H100 (80GB) — teacher models are memory-hungry.
+# H200 also works: --partition=h200 --gres=gpu:h200:1
+# L40S (48GB) may be tight with DA2-Large + SAM2 + YOLO loaded together.
 # ============================================================================
 
 set -euo pipefail

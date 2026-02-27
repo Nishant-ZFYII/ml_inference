@@ -4,7 +4,8 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32GB
-#SBATCH --gres=gpu:a100:1
+#SBATCH --partition=h100
+#SBATCH --gres=gpu:h100:1
 #SBATCH --time=12:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
@@ -12,10 +13,10 @@
 # ============================================================================
 # Student Model Training on NYU Torch HPC
 #
-# BEFORE FIRST SUBMISSION:
-#   1. Run `sinfo` to verify partition names and GPU spec strings
-#   2. Update --gres and add --partition accordingly
-#   3. Set up conda env (see setup_hpc.sh or README.md)
+# Available GPUs (sinfo): H200, H100, L40S, RTX6000
+# Using H100 (80GB VRAM). Alternatives:
+#   --partition=l40s  --gres=gpu:l40s:1   (48GB, likely shorter queue)
+#   --partition=h200  --gres=gpu:h200:1   (141GB, may have longer queue)
 # ============================================================================
 
 set -euo pipefail
