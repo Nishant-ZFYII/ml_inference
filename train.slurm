@@ -22,12 +22,12 @@ set -euo pipefail
 
 # ── Environment (follows NYU HPC best practices) ──────────────────────────
 module purge
-module load anaconda3/2024.02
+module load anaconda3/2025.06
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 # Conda activation per NYU HPC docs (source activate, not conda activate)
-source /share/apps/anaconda3/2024.02/etc/profile.d/conda.sh
+source $(conda info --base)/etc/profile.d/conda.sh
 source activate $SCRATCH/conda_envs/nchsb_ml
 export PATH=$SCRATCH/conda_envs/nchsb_ml/bin:$PATH
 export PYTHONNOUSERSITE=True

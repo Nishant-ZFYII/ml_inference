@@ -41,8 +41,8 @@ with CUDA-enabled PyTorch. This avoids filling up `$HOME` quota.
 
 ```bash
 # First, download NYU dataset (interactive, ~5 min)
-module purge && module load anaconda3/2024.02
-source /share/apps/anaconda3/2024.02/etc/profile.d/conda.sh
+module purge && module load anaconda3/2025.06
+source $(conda info --base)/etc/profile.d/conda.sh
 source activate $SCRATCH/conda_envs/nchsb_ml
 cd $HOME/ml_pipeline
 python train.py --epochs 1 --data-root $SCRATCH/nyu_depth_v2 --data-limit 10

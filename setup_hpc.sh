@@ -25,8 +25,8 @@ mkdir -p $SCRATCH/conda_pkgs
 
 # ── Step 2: Load anaconda module ───────────────────────────────────────────
 module purge
-module load anaconda3/2024.02
-source /share/apps/anaconda3/2024.02/etc/profile.d/conda.sh
+module load anaconda3/2025.06
+source $(conda info --base)/etc/profile.d/conda.sh
 
 # ── Step 3: Create prefix environment in $SCRATCH ──────────────────────────
 ENV_PATH=$SCRATCH/conda_envs/nchsb_ml
@@ -57,8 +57,8 @@ echo "Environment: $ENV_PATH"
 echo ""
 echo "To use in interactive sessions:"
 echo "  module purge"
-echo "  module load anaconda3/2024.02"
-echo "  source /share/apps/anaconda3/2024.02/etc/profile.d/conda.sh"
+echo "  module load anaconda3/2025.06"
+echo "  source \$(conda info --base)/etc/profile.d/conda.sh"
 echo "  source activate $ENV_PATH"
 echo "  export PATH=$ENV_PATH/bin:\$PATH"
 echo "  export PYTHONNOUSERSITE=True"
