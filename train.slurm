@@ -4,6 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32GB
+#SBATCH --account=torch_pr_742_general
 #SBATCH --partition=h100
 #SBATCH --gres=gpu:h100:1
 #SBATCH --time=12:00:00
