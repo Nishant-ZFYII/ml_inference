@@ -246,7 +246,7 @@ def main():
         confidence_threshold=cfg.CONFIDENCE_THRESHOLD,
         num_classes=cfg.NUM_CLASSES,
         uncertainty_weighting=use_uw,
-    )
+    ).to(device)
     if use_uw:
         print("Uncertainty weighting enabled (Kendall et al. 2018)")
 
