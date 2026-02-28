@@ -1,14 +1,13 @@
 """
 Training losses for the multi-task student model.
 
-Key design: the hybrid depth supervision target mirrors the runtime
-fusion equation in depth_fusion.py.
+Pure knowledge distillation: the student is trained against teacher
+outputs only (DA3 for depth, YOLO+SAM2 for segmentation). No ground
+truth or sensor data is used in the training loss -- GT is reserved
+exclusively for evaluation benchmarking.
 
-    Runtime:  d_fused = ToF  if confidence >= tau  else  d_student
-    Training: target  = ToF  if confidence >= tau  else  DA3
-
-This means a reviewer sees the training loss and runtime fusion and
-recognises they encode the same prior.
+This makes the pipeline dataset-agnostic: swap NYU for TUM, corridor
+data, or any other RGB dataset. Run teachers, generate a manifest, train.
 """
 
 import torch

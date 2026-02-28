@@ -12,7 +12,7 @@
 #SBATCH --error=%x-%j.err
 
 # ============================================================================
-# Teacher Inference: DA3-Metric-Large + YOLO+SAM2 on NYU val set
+# Teacher Inference: DA3-Metric-Large + YOLO+SAM2 on ALL NYU images
 # ============================================================================
 
 set -euo pipefail
@@ -60,17 +60,16 @@ cache = Path('$SCRATCH/nyu_depth_v2/nyu_cache')
 if not cache.exists():
     print('NYU cache not found. Run train.py first to download NYU data.')
     exit(1)
-val_file = cache / 'val_indices.txt'
-indices = [int(l.strip()) for l in open(val_file)]
-for idx in indices:
-    stem = f'{idx:05d}'
-    src_rgb = cache / 'rgb' / f'{stem}.png'
-    src_depth = cache / 'depth' / f'{stem}.npy'
-    if src_rgb.exists():
-        shutil.copy2(src_rgb, Path('$INPUT_RGB') / f'{stem}.png')
-    if src_depth.exists():
-        shutil.copy2(src_depth, Path('$INPUT_DEPTH') / f'{stem}.npy')
-print(f'Extracted {len(indices)} val samples')
+# Extract ALL images (train + val) so every sample has teacher labels
+count = 0
+for f in sorted((cache / 'rgb').glob('*.png')):
+    stem = f.stem
+    shutil.copy2(f, Path('$INPUT_RGB') / f.name)
+    depth_src = cache / 'depth' / f'{stem}.npy'
+    if depth_src.exists():
+        shutil.copy2(depth_src, Path('$INPUT_DEPTH') / f'{stem}.npy')
+    count += 1
+print(f'Extracted {count} samples (all train + val)')
 "
 
 # ── Step 2: Verify DA3 output on 5 frames (gate) ───────────────────────────

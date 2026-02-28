@@ -71,15 +71,19 @@ class NYUDepthV2Dataset(Dataset):
         if data_limit > 0:
             self.indices = self.indices[:data_limit]
 
-        # Load teacher manifest if available
         self._teacher_map: Dict[str, dict] = {}
         self._manifest_base = None
+        self._warned_missing = False
         if manifest_path and os.path.exists(manifest_path):
             self._manifest_base = str(Path(manifest_path).parent)
             with open(manifest_path) as f:
                 for line in f:
                     entry = json.loads(line)
                     self._teacher_map[entry["stem"]] = entry
+            covered = sum(1 for i in self.indices
+                          if f"{i:05d}" in self._teacher_map)
+            print(f"Manifest covers {covered}/{len(self.indices)} "
+                  f"{split} samples")
 
     # ── Data caching ───────────────────────────────────────────────────
 
@@ -150,15 +154,13 @@ class NYUDepthV2Dataset(Dataset):
 
         rgb = Image.open(self._cache_dir / "rgb" / f"{stem}.png").convert("RGB")
         depth = np.load(self._cache_dir / "depth" / f"{stem}.npy")
-        seg_raw = np.load(self._cache_dir / "seg" / f"{stem}.npy")
-
-        seg = remap_labels(seg_raw)
 
         confidence = (depth > 0).astype(np.float32)
 
         has_da3 = False
         da3_depth = np.zeros_like(depth)
-        if stem in self._teacher_map and self._manifest_base:
+
+        if self._manifest_base and stem in self._teacher_map:
             entry = self._teacher_map[stem]
 
             da3_rel = entry.get("da3_depth")
@@ -173,6 +175,18 @@ class NYUDepthV2Dataset(Dataset):
                 sam2_path = os.path.join(self._manifest_base, sam2_rel)
                 if os.path.exists(sam2_path):
                     seg = np.load(sam2_path).astype(np.int32)
+                else:
+                    seg = self._fallback_seg(stem)
+            else:
+                seg = self._fallback_seg(stem)
+        elif self._manifest_base:
+            if not self._warned_missing:
+                print(f"WARNING: sample {stem} not in manifest -- "
+                      f"using NYU GT fallback. Run teacher inference on all images.")
+                self._warned_missing = True
+            seg = self._fallback_seg(stem)
+        else:
+            seg = self._fallback_seg(stem)
 
         rgb, depth, seg, confidence, da3_depth = self._transform(
             rgb, depth, seg, confidence, da3_depth
@@ -186,6 +200,11 @@ class NYUDepthV2Dataset(Dataset):
             "da3_depth": da3_depth,
             "has_da3": has_da3,
         }
+
+    def _fallback_seg(self, stem: str) -> np.ndarray:
+        """Load NYU remapped seg labels as fallback when SAM2 is unavailable."""
+        seg_raw = np.load(self._cache_dir / "seg" / f"{stem}.npy")
+        return remap_labels(seg_raw)
 
     # ── Transforms ─────────────────────────────────────────────────────
 

@@ -544,7 +544,54 @@ L = 1.0 * L_depth + 0.5 * L_seg + 0.1 * L_edge
 Swap NYU for TUM, corridor, or any other dataset --- run DA3 and SAM2
 on the RGB images, generate a manifest, and retrain. No code changes.
 
-\textbf{Status:} Submitted for training. Results pending.
+\textbf{Status:} Rejected. Blended loss violates the pipeline's design
+principle (see Iteration 5).
+
+\subsection{Iteration 5: Full-Dataset Teacher Coverage (Pending)}
+
+Root cause of \emph{all} previous distillation issues was identified:
+\textbf{teacher inference only ran on 290 val images.} The manifest
+contained 290 entries, but training used 1159 samples. The remaining
+869 training samples had no DA3 depth or SAM2 seg labels and silently
+fell back to NYU ground truth via the \texttt{else} branch in
+the loss and the \texttt{remap\_labels()} path in the dataloader.
+
+\textbf{No iteration was ever doing pure distillation.} Every run was
+an accidental blend of DA3 on $\sim$20\% of batches and GT on $\sim$80\%.
+
+\subsubsection{Fixes Applied}
+
+\begin{enumerate}[nosep]
+  \item \textbf{teacher\_infer.slurm:} Changed from extracting only
+    \texttt{val\_indices.txt} to extracting \emph{all} RGB and depth
+    files from the NYU cache. DA3 and SAM2 now run on all 1449 images.
+
+  \item \textbf{nyu\_loader.py:} Dataloader now prints manifest coverage
+    at init (e.g.\ ``Manifest covers 1159/1159 train samples''). Warns
+    loudly if any sample falls back to NYU GT.
+
+  \item \textbf{losses.py:} Cleaned up to pure distillation. GT/ToF
+    fallback only activates for samples without teacher labels (should
+    be zero after re-running teacher inference).
+
+  \item \textbf{gt\_blend removed:} GT is not used anywhere in the
+    training loss. The pipeline is fully dataset-agnostic --- swap NYU
+    for TUM, corridor, or any other dataset. Run teachers, build
+    manifest, train.
+\end{enumerate}
+
+\subsubsection{Training Configuration}
+
+\begin{itemize}[nosep]
+  \item LR: $3 \times 10^{-4}$ (lower to handle noisier teacher targets)
+  \item Epochs: 200
+  \item Manifest: covers all 1449 images (1159 train + 290 val)
+  \item Depth target: DA3 only (zero GT fallback)
+  \item Seg target: SAM2 only (zero NYU remap fallback)
+\end{itemize}
+
+\textbf{Status:} Teacher inference must be re-run first (all 1449 images),
+then training. Results pending.
 
 % ============================================================================
 \section{Comparison: v1 vs v3}
@@ -714,7 +761,9 @@ Feb 27, 2026 & v3 Iter 2 eval: RMSE 1.00m, AbsRel 0.238, mIoU 19.2\% \\
 Feb 27, 2026 & Iter 3: pure DA3+SAM2 distillation --- regressed (RMSE 1.13m) \\
 Feb 27, 2026 & Root cause: DA3 noisier than NYU GT; pure distillation unstable \\
 Feb 27, 2026 & Blended loss (gt\_blend) rejected --- GT must not be in training loss \\
-Feb 28, 2026 & Iter 4: pure distillation, LR $3 \times 10^{-4}$, 200 epochs (submitted) \\
+Feb 28, 2026 & Iter 4: pure distillation, LR $3 \times 10^{-4}$, 200 epochs (overfitting) \\
+Feb 28, 2026 & Root cause found: teacher inference only covered 290/1449 images \\
+Feb 28, 2026 & Iter 5: full-dataset teachers (all 1449), pure distillation (pending) \\
 \bottomrule
 \end{longtable}
 
