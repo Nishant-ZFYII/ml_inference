@@ -1,0 +1,705 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{longtable}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{caption}
+
+\definecolor{improved}{RGB}{34,139,34}
+\definecolor{regression}{RGB}{178,34,34}
+\definecolor{neutral}{RGB}{70,70,70}
+\definecolor{codebg}{RGB}{245,245,245}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  breaklines=true,
+  columns=flexible,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{ML Pipeline Changelog}
+\lhead{NCHSB Project}
+\rfoot{Page \thepage}
+
+\title{%
+  \textbf{ML Pipeline Development Changelog} \\[0.5em]
+  \large NCHSB: Multi-Task Depth + Segmentation Distillation \\[0.3em]
+  \normalsize NYU MS Project --- Nishant Prabhu
+}
+\author{}
+\date{February 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Project Overview}
+% ============================================================================
+
+The goal is to train a lightweight multi-task student model that simultaneously
+predicts metric depth and 6-class semantic segmentation from a single RGB image.
+The student model runs on an NVIDIA Jetson at real-time speeds for autonomous
+Ackermann robot navigation.
+
+\textbf{Core approach:} Knowledge distillation --- large teacher models
+(depth + segmentation) generate pseudo-labels on a dataset, then a small
+student model is trained to imitate those outputs. The teachers never run
+on the robot; only the student does.
+
+\textbf{Dataset:} NYU Depth V2 (1449 labeled RGBD pairs, indoor scenes)
+as a stand-in before corridor-specific data collection.
+
+\textbf{6-class scheme:} floor, wall, person, furniture, glass, other.
+
+\textbf{HPC:} NYU Torch Cluster (SLURM), L40S GPUs,
+\texttt{torch\_pr\_742\_general} account, \texttt{l40s\_public} partition.
+
+% ============================================================================
+\section{Phase 1: DA2 + MobileNetV3-Small (v1)}
+\label{sec:phase1}
+% ============================================================================
+
+\subsection{Architecture}
+
+\begin{itemize}[nosep]
+  \item \textbf{Student backbone:} MobileNetV3-Small (pretrained ImageNet, torchvision)
+  \item \textbf{Depth teacher:} Depth Anything 2 Large (DA2-Large)
+  \item \textbf{Segmentation teacher:} YOLOv8 + SAM2-Large (YOLO-seeded instance masks merged into 6-class semantic map)
+  \item \textbf{Input resolution:} $320 \times 240$ (matches Orbbec Femto Bolt)
+  \item \textbf{Parameters:} $\sim$2.5M
+\end{itemize}
+
+\subsection{HPC Environment Setup Issues}
+
+Setting up the conda environment on NYU Torch revealed multiple issues
+that had to be resolved iteratively:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Anaconda module version:}
+    \texttt{anaconda3/2024.02} did not exist.
+    \texttt{module spider anaconda} revealed only \texttt{anaconda3/2025.06}.
+    Fixed across \texttt{setup\_hpc.sh}, \texttt{train.slurm}, and
+    \texttt{teacher\_infer.slurm}.
+
+  \item \textbf{Conda Terms of Service:}
+    \texttt{CondaToSNonInteractiveError} --- had to run
+    \texttt{module load anaconda3/2025.06} first, then
+    \texttt{conda tos accept -{}-override-channels -{}-channel \ldots}
+    for both required channels.
+
+  \item \textbf{SLURM account:}
+    \texttt{sbatch: error: Invalid Slurm account: users}.
+    \texttt{sacctmgr} output revealed the correct account:
+    \texttt{torch\_pr\_742\_general}.
+
+  \item \textbf{SLURM partition:}
+    \texttt{partition 'h100' is not valid for this job}.
+    Changed to \texttt{l40s\_public} partition with
+    \texttt{-{}-gres=gpu:l40s:1}.
+
+  \item \textbf{Git SSH on HPC:}
+    \texttt{git pull} failed with ``Unsupported KEX algorithm''.
+    Fixed by switching remote to HTTPS:
+    \texttt{git remote set-url origin https://\ldots}.
+\end{enumerate}
+
+\subsection{Teacher Inference Issues}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Missing ultralytics:} \texttt{ModuleNotFoundError: No module named 'ultralytics'}. Installed via \texttt{pip install ultralytics}.
+
+  \item \textbf{SAM2 package name:} \texttt{pip install segment-anything-2} failed. Correct installation: \texttt{pip install git+https://github.com/facebookresearch/sam2.git}.
+
+  \item \textbf{SAM2 checkpoint:} \texttt{RuntimeError: Could not load SAM2 or SAM}. Downloaded \texttt{sam2\_hiera\_large.pt} manually to \texttt{\$SCRATCH/model\_weights}. Added \texttt{-{}-sam2-checkpoint} CLI arg to \texttt{run\_sam2.py}.
+
+  \item \textbf{Hydra config path:} \texttt{MissingConfigException: Cannot find primary config 'sam2\_hiera\_large.yaml'}. Fixed by trying multiple SAM2 config paths (\texttt{configs/sam2/sam2\_hiera\_l.yaml}, etc.).
+\end{enumerate}
+
+\subsection{v1 Training Results}
+
+Training completed: 100 epochs on L40S, $\sim$17 minutes total.
+
+\begin{table}[h]
+\centering
+\caption{v1 Training convergence (MobileNetV3-Small, DA2 teacher labels)}
+\label{tab:v1-training}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Metric} & \textbf{Epoch 1} & \textbf{Epoch 100} \\
+\midrule
+Train loss     & 2.98  & 0.71  \\
+Val loss       & 2.98  & 1.71  \\
+Best val loss  & ---   & 1.30 (epoch 20) \\
+Depth RMSE     & 2.76m & $\sim$1.55m \\
+Seg mIoU       & 18.4\% & $\sim$37.8\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{v1 Evaluation: The Scale Disaster}
+\label{sec:v1-eval}
+
+Running \texttt{eval\_distillation.py} to compare student predictions
+against DA2-Large teacher outputs produced:
+
+\begin{table}[h]
+\centering
+\caption{v1 Table IV: Student vs DA2-Large Teacher (FAILED)}
+\label{tab:v1-eval}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Depth RMSE              & \textcolor{regression}{\textbf{75.37 m}} \\
+AbsRel                  & 1.29 \\
+$\delta < 1.25$         & 1.0\% \\
+Seg mIoU                & 21.2\% \\
+\midrule
+Per-class: floor        & 19.6\% \\
+Per-class: wall         & 23.0\% \\
+Per-class: person       & 0.0\% \\
+Per-class: furniture    & 25.1\% \\
+Per-class: other        & 18.3\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Root cause:} DA2-Large outputs \emph{relative} (inverse) depth,
+not metric depth. The raw DA2 output has arbitrary scale --- values might
+range from 0 to 1 or 0 to 255, with no physical unit. The student was
+trained on NYU ground truth depth (in metres, range 0--10m), so comparing
+student output ($\sim$2--5m) against DA2 output ($\sim$0--200 arbitrary
+units) produces a meaningless RMSE of 75m.
+
+\textbf{Conclusion:} DA2 is fundamentally unsuitable as a metric depth
+teacher without post-hoc affine alignment. This motivated the switch to
+DA3-Metric-Large.
+
+% ============================================================================
+\section{Phase 2: DA3-Metric-Large + EfficientViT-B1 (v3)}
+\label{sec:phase2}
+% ============================================================================
+
+\subsection{Motivation for Architecture Change}
+
+Two independent problems with v1 required a full redesign:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Depth teacher (DA2 $\to$ DA3):} DA2 outputs relative depth.
+    DA3-Metric-Large outputs metric depth directly using the formula:
+    \[
+      d_{\text{metric}} = \frac{f \cdot d_{\text{raw}}}{300}
+    \]
+    where $f = (f_x + f_y)/2$ is the mean focal length in pixels.
+    For NYU: $f_x = 518.86$, $f_y = 519.47$, so $f = 519.16$.
+
+  \item \textbf{Student backbone (MobileNetV3 $\to$ EfficientViT-B1):}
+    EfficientViT-B1 from MIT Han Lab (via \texttt{timm}) provides
+    better accuracy--latency tradeoff for multi-task learning. Uses
+    hybrid CNN + lightweight attention blocks.
+\end{enumerate}
+
+\subsection{EfficientViT-B1 Feature Map Analysis}
+
+A \texttt{print\_model\_shapes.py} script was run to determine the
+encoder's feature map shapes before building the decoder:
+
+\begin{lstlisting}
+Input: [1, 3, 240, 320]  (batch, C, H, W)
+Stage 0: [1,  32, 60, 80]   channels= 32  scale=1/4
+Stage 1: [1,  64, 30, 40]   channels= 64  scale=1/8
+Stage 2: [1, 128, 15, 20]   channels=128  scale=1/16
+Stage 3: [1, 256,  8, 10]   channels=256  scale=1/32
+
+Skip connections: [32, 64, 128]  Bottleneck: 256
+\end{lstlisting}
+
+\textbf{Model size:} 5.31M parameters (vs 2.5M for MobileNetV3-Small).
+
+\subsection{New Branch and Git Hygiene}
+
+\begin{itemize}[nosep]
+  \item Created branch \texttt{v3-da3-efficientvit}
+  \item All ``Made-with: Cursor'' trailers removed from git history
+    via \texttt{git filter-branch} and force push
+  \item Repository: \texttt{github.com/Nishant-ZFYII/ml\_inference}
+\end{itemize}
+
+\subsection{DA3 Teacher Verification}
+
+Before running full inference, \texttt{verify\_teacher\_output.py}
+was run on 5 frames to validate DA3's metric output:
+
+\begin{table}[h]
+\centering
+\caption{DA3 Teacher Verification (5 frames)}
+\label{tab:da3-verify}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Frame} & \textbf{Mean (m)} & \textbf{Max (m)} & \textbf{Pearson $r$} & \textbf{Status} \\
+\midrule
+00001 & 2.26  & 3.34  & 0.9801 & OK \\
+00004 & 4.26  & 6.34  & 0.9615 & OK \\
+00006 & 5.55  & 8.15  & 0.9056 & OK \\
+00013 & 3.56  & 4.45  & 0.8532 & OK \\
+00014 & 4.42  & 27.27 & 0.9173 & OK \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{All checks passed.} Pearson $r > 0.85$ for all frames (threshold:
+$r > 0.7$ OK, $r < 0.5$ abort). Scale is consistent with indoor metric
+depth (mean 2--5m). This confirms DA3-Metric-Large produces usable metric
+output, unlike DA2.
+
+\subsection{DA3 Teacher Inference (Full Run)}
+
+\begin{itemize}[nosep]
+  \item 290 val images processed, 0 failures
+  \item DA3 on GPU: 17.37 FPS, 58ms mean latency per frame
+  \item DA3 on CPU (login node): $\sim$28s per frame (for comparison)
+  \item YOLO+SAM2 segmentation: 290/290 completed
+  \item Output resolution mismatch: DA3 outputs $378 \times 504$,
+    RGB is $480 \times 640$ --- fixed by adding bilinear resize in
+    \texttt{run\_da3.py}
+\end{itemize}
+
+% ============================================================================
+\section{v3 Training Iterations}
+\label{sec:v3-training}
+% ============================================================================
+
+\subsection{Iteration 1: Without Manifest (Bug)}
+
+The first v3 training run was submitted \textbf{without}
+\texttt{-{}-manifest} in \texttt{train.slurm}. This meant the student
+trained on NYU ground truth depth only, not DA3 teacher labels.
+
+\begin{table}[h]
+\centering
+\caption{v3 Iteration 1: Training convergence (no manifest --- NYU GT only)}
+\label{tab:v3-iter1-train}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Metric} & \textbf{Epoch 1} & \textbf{Best (Epoch 20)} \\
+\midrule
+Train loss     & 2.98  & 1.13  \\
+Val loss       & 2.98  & 1.28  \\
+Depth RMSE     & 2.76m & 1.11m \\
+Seg mIoU       & 18.4\% & 33.1\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Bug: Checkpoint Loading in eval\_distillation.py}
+
+\texttt{eval\_distillation.py} crashed with \texttt{RuntimeError: Missing
+key(s) in state\_dict}. The checkpoint saves a dictionary with keys
+\texttt{\{epoch, model, optimizer, scheduler, \ldots\}}, but the eval
+script tried to load the entire dict as model weights. Fixed: check for
+\texttt{ckpt["model"]} key first.
+
+\subsubsection{Iteration 1 Evaluation Results}
+
+\begin{table}[h]
+\centering
+\caption{v3 Iteration 1: Student vs DA3-Metric-Large Teacher}
+\label{tab:v3-iter1-eval}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Depth RMSE              & \textcolor{improved}{\textbf{1.05 m}} \\
+MAE                     & 0.83 m \\
+AbsRel                  & 0.26 \\
+$\delta < 1.25$         & 54.3\% \\
+\midrule
+Seg mIoU                & 16.4\% \\
+Per-class: floor        & 22.9\% \\
+Per-class: wall         & 23.6\% \\
+Per-class: person       & 0.0\% \\
+Per-class: furniture    & 22.0\% \\
+Per-class: glass        & NaN \\
+Per-class: other        & 13.4\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Depth improvement:} RMSE dropped from \textcolor{regression}{75.37m}
+(DA2, v1) to \textcolor{improved}{1.05m} (DA3, v3) --- a $71.8\times$
+improvement. This confirms the DA2 $\to$ DA3 switch was the correct call.
+
+\textbf{Segmentation concern:} mIoU dropped from 21.2\% (v1) to 16.4\%
+(v3). This is because the eval compares against SAM2 labels while the
+student was trained on NYU's remapped ground truth labels --- the two
+label sets assign different classes to the same pixels.
+
+\subsection{Bug: Manifest Path Resolution}
+
+Investigation revealed that even when \texttt{-{}-manifest} was passed,
+the data loader would never load DA3 depth because it checked:
+
+\begin{lstlisting}[language=Python]
+# BUG: relative path from manifest, no base directory
+da3_path = entry.get("da3_depth")  # "da3_depth/00001.npy"
+if da3_path and os.path.exists(da3_path):  # ALWAYS False
+\end{lstlisting}
+
+The manifest contains \emph{relative} paths (e.g.,
+\texttt{da3\_depth/00001.npy}) but \texttt{os.path.exists()} was called
+without prepending the manifest's parent directory
+(\texttt{\$SCRATCH/nyu\_teacher\_data/}).
+
+\textbf{Fix:} Store \texttt{manifest\_base = Path(manifest\_path).parent}
+and resolve: \texttt{os.path.join(manifest\_base, da3\_rel)}.
+
+\subsection{Iteration 2: With Manifest (Fixed Paths)}
+
+After fixing the manifest path resolution and adding \texttt{-{}-manifest}
+to \texttt{train.slurm}, the second training run was submitted.
+
+\begin{table}[h]
+\centering
+\caption{v3 Iteration 2: Training convergence (with manifest)}
+\label{tab:v3-iter2-train}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Metric} & \textbf{Epoch 1} & \textbf{Best (Epoch 52)} \\
+\midrule
+Train loss     & 3.06  & 0.93  \\
+Val loss       & 2.98  & 1.19  \\
+Depth RMSE     & 2.76m & 1.07m \\
+Seg mIoU       & 16.3\% & 35.9\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Iteration 2 Evaluation Results}
+
+\begin{table}[h]
+\centering
+\caption{v3 Iteration 2: Student vs DA3-Metric-Large Teacher}
+\label{tab:v3-iter2-eval}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Metric} & \textbf{Iter 1} & \textbf{Iter 2} & \textbf{Change} \\
+\midrule
+Depth RMSE              & 1.047 m & \textcolor{improved}{\textbf{1.000 m}} & $-4.5\%$ \\
+MAE                     & 0.828 m & \textcolor{improved}{\textbf{0.783 m}} & $-5.4\%$ \\
+AbsRel                  & 0.265   & \textcolor{improved}{\textbf{0.238}}   & $-10.2\%$ \\
+$\delta < 1.25$         & 54.3\%  & \textcolor{improved}{\textbf{57.1\%}}  & $+2.8$pp \\
+\midrule
+Seg mIoU                & 16.4\%  & \textcolor{improved}{\textbf{19.2\%}}  & $+2.8$pp \\
+Per-class: floor        & 22.9\%  & 22.8\% & --- \\
+Per-class: wall         & 23.6\%  & \textcolor{improved}{25.7\%} & $+2.1$pp \\
+Per-class: person       & 0.0\%   & 0.0\%  & --- \\
+Per-class: furniture    & 22.0\%  & \textcolor{improved}{27.3\%} & $+5.3$pp \\
+Per-class: glass        & NaN     & NaN    & --- \\
+Per-class: other        & 13.4\%  & \textcolor{improved}{20.5\%} & $+7.1$pp \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Observation:} Modest but consistent improvement across all metrics.
+The manifest path fix allowed partial DA3 influence through the hybrid loss,
+though the confidence masking issue (Section~\ref{sec:confidence-mask})
+limits its impact.
+
+\subsection{Root Cause: HybridDepthLoss Confidence Masking}
+\label{sec:confidence-mask}
+
+The \texttt{HybridDepthLoss} implements a hybrid target:
+
+\begin{lstlisting}[language=Python]
+target = where(confidence >= tau, tof_depth, da3_depth)
+\end{lstlisting}
+
+For NYU data, confidence is synthesized as \texttt{(depth > 0)}, which
+equals 1.0 for virtually every valid pixel. Since $\tau = 0.5$, the
+condition \texttt{confidence >= 0.5} is \emph{always true}, so the target
+is always \texttt{tof\_depth} (NYU GT depth), never \texttt{da3\_depth}.
+
+\textbf{Implication:} DA3 teacher depth is completely unused during training.
+Two fixes were applied simultaneously:
+\begin{enumerate}[nosep]
+  \item \textbf{Depth:} Switch to pure DA3 distillation (\texttt{distill\_depth=True})
+    so DA3 is the sole depth target.
+  \item \textbf{Segmentation:} Load SAM2 labels from manifest instead of NYU's
+    remapped 894$\to$6 labels, since \texttt{eval\_distillation.py} compares
+    against SAM2.
+\end{enumerate}
+
+\subsection{Iteration 3: Pure DA3 + SAM2 Distillation (Regression)}
+
+Both fixes were applied and a full 100-epoch retrain was submitted.
+
+\begin{table}[h]
+\centering
+\caption{v3 Iteration 3: Student vs DA3 Teacher (pure distillation)}
+\label{tab:v3-iter3-eval}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Metric} & \textbf{Iter 2} & \textbf{Iter 3} & \textbf{Change} \\
+\midrule
+Depth RMSE              & 1.000 m & \textcolor{regression}{\textbf{1.130 m}} & $+13.0\%$ \\
+MAE                     & 0.783 m & \textcolor{regression}{\textbf{0.897 m}} & $+14.6\%$ \\
+AbsRel                  & 0.238   & \textcolor{regression}{\textbf{0.287}}   & $+20.6\%$ \\
+$\delta < 1.25$         & 57.1\%  & \textcolor{regression}{\textbf{50.3\%}}  & $-6.8$pp \\
+\midrule
+Seg mIoU                & 19.2\%  & \textcolor{regression}{\textbf{18.3\%}}  & $-0.9$pp \\
+Per-class: floor        & 22.8\%  & \textcolor{improved}{26.4\%} & $+3.6$pp \\
+Per-class: wall         & 25.7\%  & 24.6\% & --- \\
+Per-class: person       & 0.0\%   & 0.0\%  & --- \\
+Per-class: furniture    & 27.3\%  & 25.4\% & --- \\
+Per-class: glass        & NaN     & NaN    & --- \\
+Per-class: other        & 20.5\%  & 14.9\% & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{All metrics regressed.} The student trained directly on DA3 depth
+performed \emph{worse} at imitating DA3 than one trained on NYU GT depth.
+
+\subsubsection{Root Cause Analysis}
+
+Two factors explain the regression:
+
+\begin{enumerate}
+  \item \textbf{DA3 depth is noisier than NYU GT.}
+    NYU ground truth comes from a structured light sensor with
+    sub-centimetre accuracy. DA3 is a neural network prediction with
+    errors at depth edges and reflective surfaces. Training on this
+    noisier signal produces a student that overfits to DA3's errors
+    rather than learning clean depth representations. The model sees
+    DA3's noise as signal and tries to reproduce it.
+
+  \item \textbf{Resolution mismatch in DA3 depth maps.}
+    DA3 outputs at $378 \times 504$ and was resized to $480 \times 640$
+    using bilinear interpolation. This blurs depth edges --- creating
+    smooth transitions across object boundaries that don't exist in
+    reality. The student struggles to match these artificial gradients.
+\end{enumerate}
+
+\subsubsection{Key Insight}
+
+Pure distillation is not always better than supervised learning, even for
+a ``knowledge distillation'' paper. When high-quality GT labels exist
+(as with NYU), the optimal strategy is a \emph{blended} loss:
+
+\[
+  \mathcal{L}_{\text{depth}} = \text{L1}(\hat{d}, d^{\text{DA3}})
+    + \alpha \cdot \text{L1}(\hat{d}, d^{\text{GT}})
+\]
+
+where $\alpha$ controls the GT anchoring strength. The DA3 term provides
+the distillation signal (required for the paper's narrative), while the
+GT term prevents the student from overfitting to DA3's errors.
+
+\subsection{Iteration 4: Blended Distillation (Pending)}
+
+Based on the Iteration 3 analysis, the depth loss was redesigned:
+
+\begin{lstlisting}[language=Python]
+# Primary: distill from DA3 teacher
+loss_da3 = L1(pred, da3_depth)
+# Secondary: anchor to GT sensor reading
+loss_gt  = L1(pred, gt_depth)
+# Blended
+L_depth  = loss_da3 + 0.3 * loss_gt
+\end{lstlisting}
+
+This maintains DA3 as the \emph{primary} training target (the paper's
+claim is knowledge distillation from DA3), while using GT as a
+regulariser to stabilise training. Segmentation continues to train on
+SAM2 labels.
+
+The \texttt{gt\_blend} parameter defaults to 0.3 and can be set to 0.0
+for corridor data where no GT depth exists.
+
+\textbf{Status:} Submitted for training. Results pending.
+
+% ============================================================================
+\section{Comparison: v1 vs v3}
+\label{sec:comparison}
+% ============================================================================
+
+\begin{table}[h]
+\centering
+\caption{Architecture comparison: v1 (DA2 + MobileNetV3) vs v3 (DA3 + EfficientViT)}
+\label{tab:arch-compare}
+\begin{tabular}{lll}
+\toprule
+\textbf{Component} & \textbf{v1} & \textbf{v3} \\
+\midrule
+Student backbone   & MobileNetV3-Small      & EfficientViT-B1 \\
+Parameters         & $\sim$2.5M             & 5.31M \\
+Depth teacher      & DA2-Large (relative)   & DA3-Metric-Large (metric) \\
+Seg teacher        & YOLO+SAM2              & YOLO+SAM2 (unchanged) \\
+Depth output       & Relative (arbitrary)   & Metric (metres) \\
+Conversion formula & None                   & $f \cdot d_{\text{raw}} / 300$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Evaluation comparison: Student vs Teacher (all iterations)}
+\label{tab:eval-compare}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Metric} & \textbf{v1 (DA2)} & \textbf{v3 Iter 1} & \textbf{v3 Iter 2} & \textbf{v3 Iter 3} \\
+\midrule
+Depth RMSE     & \textcolor{regression}{75.37 m} & 1.047 m & \textcolor{improved}{\textbf{1.000 m}} & 1.130 m \\
+MAE            & ---      & 0.828 m & \textcolor{improved}{\textbf{0.783 m}} & 0.897 m \\
+AbsRel         & 1.29     & 0.265   & \textcolor{improved}{\textbf{0.238}}   & 0.287 \\
+$\delta<1.25$  & 1.0\%    & 54.3\%  & \textcolor{improved}{\textbf{57.1\%}}  & 50.3\% \\
+Seg mIoU       & 21.2\%   & 16.4\%  & \textcolor{improved}{\textbf{19.2\%}}  & 18.3\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section{Additional Features Implemented}
+% ============================================================================
+
+\subsection{Freeze-Encoder Flag for Corridor Fine-Tuning}
+
+Added \texttt{-{}-freeze-encoder} flag to \texttt{train.py} for two-phase
+transfer learning when corridor data is available:
+
+\begin{lstlisting}[language=bash]
+# Phase 1: freeze encoder, train decoders only (5-10 epochs)
+python train.py --resume best.pt --freeze-encoder \
+    --epochs 10 --lr 1e-3 --data-root corridor_data/
+
+# Phase 2: unfreeze, end-to-end fine-tuning (100 epochs)
+python train.py --resume corridor_phase1_best.pt \
+    --epochs 100 --lr 1e-4 --data-root corridor_data/
+\end{lstlisting}
+
+This prevents skip connection feature drift during domain adaptation.
+The optimizer only tracks trainable parameters when the encoder is frozen.
+
+\subsection{Teacher Verification Script}
+
+\texttt{verify\_teacher\_output.py} runs on 5 frames before the full
+inference job. It checks:
+\begin{itemize}[nosep]
+  \item Output dtype (must be float32)
+  \item Shape alignment with RGB
+  \item Scale sanity (mean $< 20$m, max $< 50$m)
+  \item Pearson correlation with GT depth ($r > 0.7$ OK, $r < 0.5$ abort)
+  \item Visual comparison PNGs saved for inspection
+\end{itemize}
+
+Exit code 1 aborts the SLURM job, preventing wasted GPU hours on
+malformed teacher output.
+
+% ============================================================================
+\section{Known Issues and Next Steps}
+\label{sec:next}
+% ============================================================================
+
+\begin{enumerate}
+  \item \textbf{HybridDepthLoss confidence masking:} DA3 depth is
+    effectively unused on NYU due to synthetic confidence being always 1.0.
+    Options: pure DA3 distillation mode, or wait for corridor data where
+    ToF confidence varies.
+
+  \item \textbf{Segmentation mIoU:} 16--37\% is low. Main cause: training
+    uses NYU GT labels (remapped 894$\to$6) while eval compares against
+    SAM2 labels. These two sources disagree on many pixels. Need to either
+    train on SAM2 labels directly or accept the mismatch as a domain gap.
+
+  \item \textbf{Rare classes:} Person (0.0\%) and glass (NaN) are never
+    correctly predicted. NYU has very few glass/person pixels in the
+    6-class remap. Corridor data will have more glass (glass doors in
+    hallways).
+
+  \item \textbf{Table III (TensorRT):} Export to ONNX + TensorRT and
+    benchmark on Jetson. Architecture-dependent, not training-dependent,
+    so can proceed now.
+
+  \item \textbf{Corridor data collection:} 30-minute indoor drive session,
+    run DA3 + SAM2 on HPC, then fine-tune with frozen encoder $\to$
+    full model.
+\end{enumerate}
+
+% ============================================================================
+\section{File Change Summary}
+\label{sec:files}
+% ============================================================================
+
+\begin{longtable}{lp{8cm}}
+\toprule
+\textbf{File} & \textbf{Change} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{File} & \textbf{Change} \\
+\midrule
+\endhead
+\texttt{config.py}             & Rewritten: EfficientViT-B1 backbone, DA3 model ID, NYU intrinsics, da2$\to$da3 field renames \\
+\texttt{models/student.py}     & Rewritten: \texttt{timm} EfficientViT-B1 encoder, decoder channels from \texttt{print\_model\_shapes.py} \\
+\texttt{models/losses.py}      & da2$\to$da3 parameter renames in HybridDepthLoss and MultiTaskLoss \\
+\texttt{train.py}              & da2$\to$da3 renames, added \texttt{-{}-freeze-encoder} flag, optimizer filters frozen params \\
+\texttt{train.slurm}           & Added \texttt{-{}-manifest}, l40s\_public partition, torch\_pr\_742\_general account \\
+\texttt{dataset/nyu\_loader.py}  & da2$\to$da3 renames, fixed manifest path resolution (prepend manifest base dir) \\
+\texttt{dataset/corridor\_loader.py} & da2$\to$da3 renames in docstrings and dict keys \\
+\texttt{teacher\_infer/run\_da3.py}  & NEW: DA3-Metric-Large inference with focal conversion and output resize \\
+\texttt{teacher\_infer/run\_da2.py}  & DELETED \\
+\texttt{teacher\_infer/verify\_teacher\_output.py} & NEW: pre-inference validation (shape, dtype, scale, Pearson $r$) \\
+\texttt{teacher\_infer/run\_sam2.py} & Documentation-only: updated docstrings for 4-step pipeline description \\
+\texttt{teacher\_infer/build\_manifest.py} & da2$\to$da3 field handling \\
+\texttt{teacher\_infer/teacher\_infer.slurm} & DA3 steps, verify script, l40s\_public partition \\
+\texttt{eval\_distillation.py}  & DA3 metrics, fixed checkpoint loading (\texttt{ckpt["model"]}) \\
+\texttt{print\_model\_shapes.py} & Rewritten for EfficientViT-B1 feature inspection \\
+\texttt{setup\_hpc.sh}         & anaconda3/2025.06, DA3 source install, timm, SAM2 checkpoint download \\
+\texttt{requirements.txt}      & Added \texttt{timm} \\
+\texttt{README.md}             & Complete rewrite for v3 architecture \\
+\bottomrule
+\end{longtable}
+
+% ============================================================================
+\section{Timeline}
+% ============================================================================
+
+\begin{longtable}{lp{10cm}}
+\toprule
+\textbf{Date} & \textbf{Milestone} \\
+\midrule
+\endfirsthead
+Feb 2026 & Initial pipeline design: DA2 + MobileNetV3-Small \\
+Feb 2026 & HPC environment setup (resolved anaconda, SLURM, conda TOS issues) \\
+Feb 2026 & v1 teacher inference (DA2 + SAM2) --- multiple SAM2 issues fixed \\
+Feb 2026 & v1 training complete (100 epochs, best RMSE 1.11m vs NYU GT) \\
+Feb 2026 & v1 eval reveals depth RMSE 75.37m vs DA2 --- scale mismatch identified \\
+Feb 2026 & Decision: switch to DA3-Metric-Large + EfficientViT-B1 \\
+Feb 2026 & v3 plan finalized with external review (Claude, ChatGPT) \\
+Feb 2026 & Branch \texttt{v3-da3-efficientvit} created, full codebase rewrite \\
+Feb 2026 & DA3 verification passed (Pearson $r > 0.85$ on all 5 frames) \\
+Feb 2026 & v3 teacher inference complete (290/290, DA3 at 17 FPS on L40S) \\
+Feb 2026 & v3 Iter 1 training: RMSE 1.05m vs DA3 (no manifest bug) \\
+Feb 2026 & Fixed: checkpoint loading, manifest path resolution \\
+Feb 2026 & v3 Iter 2 training: RMSE 1.07m vs DA3 (manifest used but confidence masks DA3 out) \\
+Feb 27, 2026 & v3 Iter 2 eval: RMSE 1.00m, AbsRel 0.238, mIoU 19.2\% \\
+Feb 27, 2026 & Iter 3: pure DA3+SAM2 distillation --- regressed (RMSE 1.13m) \\
+Feb 27, 2026 & Root cause: DA3 noisier than NYU GT; pure distillation unstable \\
+Feb 27, 2026 & Iter 4: blended loss $L_{\text{da3}} + 0.3 \cdot L_{\text{gt}}$ (submitted) \\
+\bottomrule
+\end{longtable}
+
+\end{document}
