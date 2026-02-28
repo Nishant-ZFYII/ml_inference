@@ -73,7 +73,9 @@ class NYUDepthV2Dataset(Dataset):
 
         # Load teacher manifest if available
         self._teacher_map: Dict[str, dict] = {}
+        self._manifest_base = None
         if manifest_path and os.path.exists(manifest_path):
+            self._manifest_base = str(Path(manifest_path).parent)
             with open(manifest_path) as f:
                 for line in f:
                     entry = json.loads(line)
@@ -158,12 +160,14 @@ class NYUDepthV2Dataset(Dataset):
         # Load DA3 teacher depth if available
         has_da3 = False
         da3_depth = np.zeros_like(depth)
-        if stem in self._teacher_map:
+        if stem in self._teacher_map and self._manifest_base:
             entry = self._teacher_map[stem]
-            da3_path = entry.get("da3_depth")
-            if da3_path and os.path.exists(da3_path):
-                da3_depth = np.load(da3_path).astype(np.float32)
-                has_da3 = True
+            da3_rel = entry.get("da3_depth")
+            if da3_rel:
+                da3_path = os.path.join(self._manifest_base, da3_rel)
+                if os.path.exists(da3_path):
+                    da3_depth = np.load(da3_path).astype(np.float32)
+                    has_da3 = True
 
         rgb, depth, seg, confidence, da3_depth = self._transform(
             rgb, depth, seg, confidence, da3_depth
