@@ -7,6 +7,12 @@ Usage (local CPU validation):
 
 Usage (HPC with SLURM):
     See train.slurm
+
+Two-phase fine-tuning for corridor data:
+    # Phase 1: freeze encoder, train decoders only
+    python train.py --resume best.pt --freeze-encoder --epochs 10 --lr 1e-3
+    # Phase 2: unfreeze, end-to-end fine-tuning
+    python train.py --resume corridor_phase1_best.pt --epochs 100 --lr 1e-4
 """
 
 import argparse
@@ -38,6 +44,8 @@ def parse_args():
     p.add_argument("--manifest", type=str, default=None)
     p.add_argument("--resume", type=str, default=None,
                    help="Path to checkpoint to resume from")
+    p.add_argument("--freeze-encoder", action="store_true",
+                   help="Freeze encoder weights (train decoders only)")
     p.add_argument("--num-workers", type=int, default=None)
     return p.parse_args()
 
@@ -201,8 +209,16 @@ def main():
     # Model
     model = build_student(num_classes=cfg.NUM_CLASSES, pretrained=True)
     model = model.to(device)
-    param_count = sum(p.numel() for p in model.parameters()) / 1e6
-    print(f"Model parameters: {param_count:.2f}M")
+
+    if args.freeze_encoder:
+        for param in model.encoder.parameters():
+            param.requires_grad = False
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
+        total = sum(p.numel() for p in model.parameters()) / 1e6
+        print(f"Encoder frozen. Trainable: {trainable:.2f}M / {total:.2f}M total")
+    else:
+        param_count = sum(p.numel() for p in model.parameters()) / 1e6
+        print(f"Model parameters: {param_count:.2f}M")
 
     # Loss
     criterion = MultiTaskLoss(
@@ -214,8 +230,10 @@ def main():
     )
 
     # Optimizer & scheduler
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.LR,
-                                  weight_decay=cfg.WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=cfg.LR, weight_decay=cfg.WEIGHT_DECAY,
+    )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=cfg.EPOCHS)
 
