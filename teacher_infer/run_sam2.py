@@ -74,7 +74,7 @@ def load_sam2(device: torch.device, checkpoint: str = None):
 
         ckpt = checkpoint or "sam2_hiera_large.pt"
         sam2_model = build_sam2(
-            "sam2_hiera_large",
+            "sam2_hiera_large.yaml",
             ckpt,
             device=device,
         )
