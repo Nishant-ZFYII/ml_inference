@@ -590,8 +590,103 @@ an accidental blend of DA3 on $\sim$20\% of batches and GT on $\sim$80\%.
   \item Seg target: SAM2 only (zero NYU remap fallback)
 \end{itemize}
 
-\textbf{Status:} Teacher inference must be re-run first (all 1449 images),
-then training. Results pending.
+\subsubsection{Training Results}
+
+\begin{table}[h]
+\centering
+\caption{Iteration 5 training progression (selected epochs)}
+\label{tab:iter5-training}
+\begin{tabular}{rrrrrr}
+\toprule
+\textbf{Epoch} & \textbf{Train Loss} & \textbf{Val Loss} & \textbf{Depth RMSE} & \textbf{Seg mIoU} & \textbf{Note} \\
+\midrule
+1    & 4.1457 & 3.7241 & 2.72 m & 14.0\% & --- \\
+12   & 2.1009 & 1.5827 & 1.27 m & 25.8\% & Best depth RMSE region \\
+15   & 1.7463 & 1.5470 & \textcolor{improved}{\textbf{1.24 m}} & 28.4\% & Best depth RMSE \\
+42   & 0.9315 & \textcolor{improved}{\textbf{1.3485}} & 1.33 m & 29.5\% & \textbf{Best val loss (saved)} \\
+77   & 0.6721 & 1.8780 & 2.35 m & 34.3\% & Seg improving, depth diverging \\
+109  & 0.5675 & 2.1412 & 2.61 m & 34.8\% & --- \\
+139  & 0.5006 & 2.1393 & 2.55 m & 35.5\% & --- \\
+163  & 0.4684 & 2.1415 & 2.53 m & \textcolor{improved}{\textbf{35.8\%}} & Best seg mIoU \\
+200  & 0.4463 & 2.1257 & 2.47 m & 34.7\% & Final epoch \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key observation: depth and segmentation diverge.} Depth RMSE
+peaked at epoch 15 (1.24\,m) and the best checkpoint was locked at
+epoch 42 (1.33\,m). After epoch 50, depth RMSE never dropped below
+2.0\,m again. Meanwhile, seg mIoU climbed steadily from 29.5\% (epoch
+42) to 35.8\% (epoch 163). The combined val loss could not improve
+because depth overfitting dominated the metric.
+
+Train loss dropped smoothly from 4.15 to 0.45 (10$\times$ reduction),
+confirming the model is fitting the training data well --- but depth
+generalisation to the 290-sample val set degrades after epoch $\sim$40.
+
+\subsubsection{Multi-Task Divergence Analysis}
+
+This is a known challenge in multi-task learning: \textbf{tasks converge
+at different rates.} Depth distillation from DA3 is harder (noisier
+targets, continuous regression) and peaks early. Segmentation from SAM2
+is easier (discrete labels, cross-entropy) and benefits from longer
+training.
+
+The combined val loss selects epoch 42 as best, which is a compromise:
+decent depth (1.33\,m) but suboptimal seg (29.5\% vs achievable 35.8\%).
+This means the \texttt{best.pt} checkpoint underperforms on segmentation
+by $\sim$6 percentage points compared to what the model can achieve.
+
+\textbf{Status:} Training complete. Formal evaluation running on
+\texttt{best.pt} (epoch 42). Results for Table IV pending.
+
+\subsection{Iteration 6: Uncertainty Weighting + Per-Task Checkpoints (Pending)}
+
+Two changes to address the multi-task divergence observed in Iteration 5:
+
+\subsubsection{Uncertainty Weighting (Kendall et al.\ 2018)}
+
+Replaces fixed loss weights ($\lambda_d = 1.0$, $\lambda_s = 0.5$) with
+learnable per-task log-variance parameters:
+
+\[
+  \mathcal{L} = \frac{1}{2\sigma_d^2} L_{\text{depth}} + \frac{1}{2} \log \sigma_d^2
+              + \frac{1}{2\sigma_s^2} L_{\text{seg}} + \frac{1}{2} \log \sigma_s^2
+              + \lambda_e \cdot L_{\text{edge}}
+\]
+
+The model learns $\log \sigma_d^2$ and $\log \sigma_s^2$ jointly with the
+network weights. When depth loss is noisy (high variance), $\sigma_d^2$
+increases, automatically down-weighting depth. The $\log \sigma$ terms
+prevent the model from setting all weights to zero. Only 2 extra scalar
+parameters added to the optimiser.
+
+Enabled via \texttt{-{}-uncertainty-weighting} flag in \texttt{train.py}.
+
+\subsubsection{Per-Task Checkpointing}
+
+In addition to \texttt{best.pt} (best combined val loss), the training
+loop now saves:
+
+\begin{itemize}[nosep]
+  \item \texttt{best\_depth.pt} --- updated when val depth RMSE improves
+  \item \texttt{best\_seg.pt} --- updated when val seg mIoU improves
+\end{itemize}
+
+This ensures neither task's optimum is lost due to the other task's
+trajectory. All three checkpoints can be evaluated independently.
+
+\subsubsection{Training Configuration}
+
+\begin{itemize}[nosep]
+  \item LR: $3 \times 10^{-4}$, Epochs: 200
+  \item Uncertainty weighting: enabled
+  \item Per-task checkpoints: enabled
+  \item Manifest: 1449 images (same as Iter 5)
+\end{itemize}
+
+\textbf{Status:} Code changes complete. Awaiting Iter 5 evaluation to
+finish, then training.
 
 % ============================================================================
 \section{Comparison: v1 vs v3}
@@ -620,16 +715,18 @@ Conversion formula & None                   & $f \cdot d_{\text{raw}} / 300$ \\
 \centering
 \caption{Evaluation comparison: Student vs Teacher (all iterations)}
 \label{tab:eval-compare}
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrrrr}
 \toprule
-\textbf{Metric} & \textbf{v1 (DA2)} & \textbf{v3 Iter 1} & \textbf{v3 Iter 2} & \textbf{v3 Iter 3} \\
+\textbf{Metric} & \textbf{v1 (DA2)} & \textbf{v3 Iter 1} & \textbf{v3 Iter 2} & \textbf{v3 Iter 3} & \textbf{v3 Iter 5} \\
 \midrule
-Depth RMSE     & \textcolor{regression}{75.37 m} & 1.047 m & \textcolor{improved}{\textbf{1.000 m}} & 1.130 m \\
-MAE            & ---      & 0.828 m & \textcolor{improved}{\textbf{0.783 m}} & 0.897 m \\
-AbsRel         & 1.29     & 0.265   & \textcolor{improved}{\textbf{0.238}}   & 0.287 \\
-$\delta<1.25$  & 1.0\%    & 54.3\%  & \textcolor{improved}{\textbf{57.1\%}}  & 50.3\% \\
-Seg mIoU       & 21.2\%   & 16.4\%  & \textcolor{improved}{\textbf{19.2\%}}  & 18.3\% \\
+Depth RMSE     & \textcolor{regression}{75.37 m} & 1.047 m & \textcolor{improved}{\textbf{1.000 m}} & 1.130 m & 1.325 m$^\dagger$ \\
+MAE            & ---      & 0.828 m & \textcolor{improved}{\textbf{0.783 m}} & 0.897 m & (eval pending) \\
+AbsRel         & 1.29     & 0.265   & \textcolor{improved}{\textbf{0.238}}   & 0.287   & (eval pending) \\
+$\delta<1.25$  & 1.0\%    & 54.3\%  & \textcolor{improved}{\textbf{57.1\%}}  & 50.3\%  & (eval pending) \\
+Seg mIoU       & 21.2\%   & 16.4\%  & 19.2\%  & 18.3\%  & \textcolor{improved}{\textbf{29.5\%}}$^\dagger$ \\
 \bottomrule
+\multicolumn{6}{l}{\footnotesize $^\dagger$Training metrics at best checkpoint (epoch 42). Formal eval pending.} \\
+\multicolumn{6}{l}{\footnotesize Iter 2 RMSE used GT depth on $\sim$80\% of samples; Iter 5 is first pure distillation.}
 \end{tabular}
 \end{table}
 
@@ -676,28 +773,41 @@ malformed teacher output.
 % ============================================================================
 
 \begin{enumerate}
-  \item \textbf{HybridDepthLoss confidence masking:} DA3 depth is
-    effectively unused on NYU due to synthetic confidence being always 1.0.
-    Options: pure DA3 distillation mode, or wait for corridor data where
-    ToF confidence varies.
+  \item \textbf{Multi-task divergence (critical):} Depth peaks at epoch
+    $\sim$15--42, then overfits. Seg keeps improving until epoch
+    $\sim$160. A single combined val loss cannot capture both optima.
+    Solutions under consideration:
+    \begin{itemize}[nosep]
+      \item \textbf{Two-phase training:} Joint training for 50 epochs
+        (captures depth), then freeze depth decoder and train seg-only.
+      \item \textbf{Per-task checkpointing:} Save \texttt{best\_depth.pt}
+        and \texttt{best\_seg.pt} separately based on per-metric criteria.
+      \item \textbf{Uncertainty weighting} (Kendall et al.\ 2018):
+        Learnable per-task log-variance scales losses automatically.
+    \end{itemize}
 
-  \item \textbf{Segmentation mIoU:} 16--37\% is low. Main cause: training
-    uses NYU GT labels (remapped 894$\to$6) while eval compares against
-    SAM2 labels. These two sources disagree on many pixels. Need to either
-    train on SAM2 labels directly or accept the mismatch as a domain gap.
+  \item \textbf{Depth RMSE regression:} Iter 5 depth (1.33\,m at best
+    checkpoint) is worse than Iter 2 (1.00\,m). However, Iter 2 used
+    NYU GT depth on $\sim$80\% of samples --- not true distillation.
+    The 1.33\,m is the honest baseline for pure DA3 distillation.
+
+  \item \textbf{Small validation set:} 290 val samples causes high
+    variance in val metrics (RMSE swings from 1.2\,m to 3.8\,m between
+    consecutive epochs). Cross-dataset evaluation (TUM, DIODE, or
+    corridor data) would provide a more robust signal.
 
   \item \textbf{Rare classes:} Person (0.0\%) and glass (NaN) are never
     correctly predicted. NYU has very few glass/person pixels in the
-    6-class remap. Corridor data will have more glass (glass doors in
-    hallways).
+    6-class remap. Corridor data will have more glass (glass doors).
 
   \item \textbf{Table III (TensorRT):} Export to ONNX + TensorRT and
     benchmark on Jetson. Architecture-dependent, not training-dependent,
     so can proceed now.
 
-  \item \textbf{Corridor data collection:} 30-minute indoor drive session,
-    run DA3 + SAM2 on HPC, then fine-tune with frozen encoder $\to$
-    full model.
+  \item \textbf{Cross-dataset generalisation:} Train on a larger dataset
+    (TUM RGB-D, DIODE, or Hypersim), evaluate on NYU as a held-out
+    benchmark. Demonstrates dataset-agnosticism and eliminates the
+    small-dataset problem.
 \end{enumerate}
 
 % ============================================================================
@@ -716,17 +826,17 @@ malformed teacher output.
 \endhead
 \texttt{config.py}             & Rewritten: EfficientViT-B1 backbone, DA3 model ID, NYU intrinsics, da2$\to$da3 field renames \\
 \texttt{models/student.py}     & Rewritten: \texttt{timm} EfficientViT-B1 encoder, decoder channels from \texttt{print\_model\_shapes.py} \\
-\texttt{models/losses.py}      & da2$\to$da3 parameter renames in HybridDepthLoss and MultiTaskLoss \\
-\texttt{train.py}              & da2$\to$da3 renames, added \texttt{-{}-freeze-encoder} flag, optimizer filters frozen params \\
+\texttt{models/losses.py}      & da2$\to$da3 renames; Iter 5: pure distillation; Iter 6: uncertainty weighting \\
+\texttt{train.py}              & da2$\to$da3 renames, \texttt{-{}-freeze-encoder}; Iter 6: \texttt{-{}-uncertainty-weighting}, per-task checkpoints \\
 \texttt{train.slurm}           & Added \texttt{-{}-manifest}, l40s\_public partition, torch\_pr\_742\_general account \\
-\texttt{dataset/nyu\_loader.py}  & da2$\to$da3 renames, fixed manifest path resolution (prepend manifest base dir) \\
+\texttt{dataset/nyu\_loader.py}  & da2$\to$da3 renames, manifest path fix; Iter 5: manifest coverage print, GT fallback warning \\
 \texttt{dataset/corridor\_loader.py} & da2$\to$da3 renames in docstrings and dict keys \\
 \texttt{teacher\_infer/run\_da3.py}  & NEW: DA3-Metric-Large inference with focal conversion and output resize \\
 \texttt{teacher\_infer/run\_da2.py}  & DELETED \\
 \texttt{teacher\_infer/verify\_teacher\_output.py} & NEW: pre-inference validation (shape, dtype, scale, Pearson $r$) \\
 \texttt{teacher\_infer/run\_sam2.py} & Documentation-only: updated docstrings for 4-step pipeline description \\
 \texttt{teacher\_infer/build\_manifest.py} & da2$\to$da3 field handling \\
-\texttt{teacher\_infer/teacher\_infer.slurm} & DA3 steps, verify script, l40s\_public partition \\
+\texttt{teacher\_infer/teacher\_infer.slurm} & DA3 steps, verify script; Iter 5: all 1449 images (not just val) \\
 \texttt{eval\_distillation.py}  & DA3 metrics, fixed checkpoint loading (\texttt{ckpt["model"]}) \\
 \texttt{print\_model\_shapes.py} & Rewritten for EfficientViT-B1 feature inspection \\
 \texttt{setup\_hpc.sh}         & anaconda3/2025.06, DA3 source install, timm, SAM2 checkpoint download \\
@@ -763,7 +873,10 @@ Feb 27, 2026 & Root cause: DA3 noisier than NYU GT; pure distillation unstable \
 Feb 27, 2026 & Blended loss (gt\_blend) rejected --- GT must not be in training loss \\
 Feb 28, 2026 & Iter 4: pure distillation, LR $3 \times 10^{-4}$, 200 epochs (overfitting) \\
 Feb 28, 2026 & Root cause found: teacher inference only covered 290/1449 images \\
-Feb 28, 2026 & Iter 5: full-dataset teachers (all 1449), pure distillation (pending) \\
+Feb 28, 2026 & Iter 5: full-dataset teachers (all 1449), pure distillation \\
+Feb 28, 2026 & Iter 5 training complete (200 epochs): depth/seg divergence observed \\
+Feb 28, 2026 & Best checkpoint epoch 42: RMSE 1.33m, mIoU 29.5\% (eval running) \\
+Feb 28, 2026 & Iter 6: uncertainty weighting + per-task checkpoints (code ready) \\
 \bottomrule
 \end{longtable}
 

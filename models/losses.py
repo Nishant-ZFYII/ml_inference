@@ -93,8 +93,19 @@ class EdgeAwareSmoothness(nn.Module):
 
 class MultiTaskLoss(nn.Module):
     """
-    Combined multi-task loss:
+    Combined multi-task loss with optional uncertainty weighting.
+
+    Fixed mode (default, backward-compatible):
         L = λ_d · L_depth + λ_s · L_seg + λ_e · L_edge
+
+    Uncertainty mode (Kendall, Gal & Cipolla, CVPR 2018):
+        L = (1 / 2σ²_d) · L_depth + log(σ_d)
+          + (1 / 2σ²_s) · L_seg   + log(σ_s)
+          + λ_e · L_edge
+
+    The model learns per-task log-variance parameters that automatically
+    balance depth vs segmentation. Tasks with higher noise get
+    down-weighted; tasks that are easier to learn get up-weighted.
     """
 
     def __init__(
@@ -104,15 +115,22 @@ class MultiTaskLoss(nn.Module):
         lambda_edge: float = 0.1,
         confidence_threshold: float = 0.5,
         num_classes: int = 6,
+        uncertainty_weighting: bool = False,
     ):
         super().__init__()
         self.lambda_depth = lambda_depth
         self.lambda_seg = lambda_seg
         self.lambda_edge = lambda_edge
+        self.uncertainty_weighting = uncertainty_weighting
 
         self.depth_loss = HybridDepthLoss(confidence_threshold)
         self.edge_loss = EdgeAwareSmoothness()
         self.seg_loss = nn.CrossEntropyLoss(ignore_index=255)
+
+        if uncertainty_weighting:
+            # Learnable log-variance per task (initialised to 0 → σ²=1)
+            self.log_var_depth = nn.Parameter(torch.zeros(1))
+            self.log_var_seg = nn.Parameter(torch.zeros(1))
 
     def forward(
         self,
@@ -127,19 +145,34 @@ class MultiTaskLoss(nn.Module):
     ) -> dict:
         """
         Returns dict with 'total', 'depth', 'seg', 'edge' loss values.
+        Includes learned weights when uncertainty_weighting is enabled.
         """
         l_depth = self.depth_loss(pred_depth, gt_depth, confidence,
                                   da3_depth, has_da3)
         l_seg = self.seg_loss(pred_seg, gt_seg)
         l_edge = self.edge_loss(pred_depth, rgb)
 
-        total = (self.lambda_depth * l_depth
-                 + self.lambda_seg * l_seg
-                 + self.lambda_edge * l_edge)
+        if self.uncertainty_weighting:
+            # Kendall et al.: precision-weighted losses + regulariser
+            w_depth = torch.exp(-self.log_var_depth)
+            w_seg = torch.exp(-self.log_var_seg)
+            total = (0.5 * w_depth * l_depth + 0.5 * self.log_var_depth
+                     + 0.5 * w_seg * l_seg + 0.5 * self.log_var_seg
+                     + self.lambda_edge * l_edge)
+        else:
+            total = (self.lambda_depth * l_depth
+                     + self.lambda_seg * l_seg
+                     + self.lambda_edge * l_edge)
 
-        return {
+        result = {
             "total": total,
             "depth": l_depth.detach(),
             "seg": l_seg.detach(),
             "edge": l_edge.detach(),
         }
+
+        if self.uncertainty_weighting:
+            result["w_depth"] = w_depth.detach()
+            result["w_seg"] = w_seg.detach()
+
+        return result

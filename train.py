@@ -46,6 +46,8 @@ def parse_args():
                    help="Path to checkpoint to resume from")
     p.add_argument("--freeze-encoder", action="store_true",
                    help="Freeze encoder weights (train decoders only)")
+    p.add_argument("--uncertainty-weighting", action="store_true",
+                   help="Use Kendall et al. learned task weighting")
     p.add_argument("--num-workers", type=int, default=None)
     return p.parse_args()
 
@@ -136,6 +138,13 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler=None):
 
         for k in total_losses:
             total_losses[k] += losses[k].item() if isinstance(losses[k], torch.Tensor) else losses[k]
+
+        if "w_depth" in losses:
+            total_losses.setdefault("w_depth", 0)
+            total_losses.setdefault("w_seg", 0)
+            total_losses["w_depth"] += losses["w_depth"].item()
+            total_losses["w_seg"] += losses["w_seg"].item()
+
         n_batches += 1
 
         pbar.set_postfix(loss=f"{losses['total'].item():.4f}")
@@ -149,6 +158,7 @@ def validate(model, loader, criterion, device, num_classes=6):
     total_losses = {"total": 0, "depth": 0, "seg": 0, "edge": 0}
     all_rmse, all_miou = [], []
     n_batches = 0
+    has_weights = False
 
     for batch in tqdm(loader, desc="Val", leave=False):
         rgb = batch["rgb"].to(device)
@@ -167,6 +177,13 @@ def validate(model, loader, criterion, device, num_classes=6):
 
         for k in total_losses:
             total_losses[k] += losses[k].item() if isinstance(losses[k], torch.Tensor) else losses[k]
+
+        if "w_depth" in losses:
+            has_weights = True
+            total_losses.setdefault("w_depth", 0)
+            total_losses.setdefault("w_seg", 0)
+            total_losses["w_depth"] += losses["w_depth"].item()
+            total_losses["w_seg"] += losses["w_seg"].item()
 
         rmse, miou = compute_metrics(pred_depth, gt_depth, pred_seg, gt_seg,
                                      num_classes)
@@ -221,18 +238,25 @@ def main():
         print(f"Model parameters: {param_count:.2f}M")
 
     # Loss
+    use_uw = args.uncertainty_weighting
     criterion = MultiTaskLoss(
         lambda_depth=cfg.LAMBDA_DEPTH,
         lambda_seg=cfg.LAMBDA_SEG,
         lambda_edge=cfg.LAMBDA_EDGE,
         confidence_threshold=cfg.CONFIDENCE_THRESHOLD,
         num_classes=cfg.NUM_CLASSES,
+        uncertainty_weighting=use_uw,
     )
+    if use_uw:
+        print("Uncertainty weighting enabled (Kendall et al. 2018)")
 
     # Optimizer & scheduler
+    # Include criterion params (log-variance) when uncertainty weighting is on
+    params = list(filter(lambda p: p.requires_grad, model.parameters()))
+    if use_uw:
+        params += list(criterion.parameters())
     optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=cfg.LR, weight_decay=cfg.WEIGHT_DECAY,
+        params, lr=cfg.LR, weight_decay=cfg.WEIGHT_DECAY,
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=cfg.EPOCHS)
@@ -256,6 +280,9 @@ def main():
         print(f"Resumed from epoch {start_epoch}")
 
     # ── Training loop ──────────────────────────────────────────────────
+    best_depth_rmse = float("inf")
+    best_seg_miou = 0.0
+
     print(f"\nStarting training for {cfg.EPOCHS} epochs...")
     for epoch in range(start_epoch, cfg.EPOCHS):
         t0 = time.time()
@@ -270,12 +297,16 @@ def main():
         elapsed = time.time() - t0
         lr = optimizer.param_groups[0]["lr"]
 
-        print(f"Epoch {epoch+1}/{cfg.EPOCHS} ({elapsed:.1f}s)  "
-              f"lr={lr:.6f}  "
-              f"train_loss={train_losses['total']:.4f}  "
-              f"val_loss={val_losses['total']:.4f}  "
-              f"depth_RMSE={val_rmse:.4f}m  "
-              f"seg_mIoU={val_miou*100:.1f}%")
+        log_line = (f"Epoch {epoch+1}/{cfg.EPOCHS} ({elapsed:.1f}s)  "
+                    f"lr={lr:.6f}  "
+                    f"train_loss={train_losses['total']:.4f}  "
+                    f"val_loss={val_losses['total']:.4f}  "
+                    f"depth_RMSE={val_rmse:.4f}m  "
+                    f"seg_mIoU={val_miou*100:.1f}%")
+        if use_uw and "w_depth" in val_losses:
+            log_line += (f"  w_d={val_losses['w_depth']:.3f}"
+                         f"  w_s={val_losses['w_seg']:.3f}")
+        print(log_line)
 
         # TensorBoard
         writer.add_scalar("loss/train_total", train_losses["total"], epoch)
@@ -286,6 +317,9 @@ def main():
         writer.add_scalar("metrics/val_depth_rmse", val_rmse, epoch)
         writer.add_scalar("metrics/val_seg_miou", val_miou, epoch)
         writer.add_scalar("lr", lr, epoch)
+        if use_uw and "w_depth" in train_losses:
+            writer.add_scalar("weights/depth", train_losses["w_depth"], epoch)
+            writer.add_scalar("weights/seg", train_losses["w_seg"], epoch)
 
         # Checkpointing
         ckpt_data = {
@@ -294,15 +328,22 @@ def main():
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
             "val_loss": val_losses["total"],
+            "val_depth_rmse": val_rmse,
+            "val_seg_miou": val_miou,
             "best_val_loss": best_val_loss,
+            "best_depth_rmse": best_depth_rmse,
+            "best_seg_miou": best_seg_miou,
             "config": vars(cfg),
         }
+        if use_uw:
+            ckpt_data["criterion"] = criterion.state_dict()
 
         if (epoch + 1) % cfg.SAVE_EVERY == 0:
             path = os.path.join(cfg.CHECKPOINT_DIR, f"epoch_{epoch+1:03d}.pt")
             torch.save(ckpt_data, path)
             print(f"  Saved checkpoint: {path}")
 
+        # Best combined val loss
         if val_losses["total"] < best_val_loss:
             best_val_loss = val_losses["total"]
             ckpt_data["best_val_loss"] = best_val_loss
@@ -310,11 +351,29 @@ def main():
             torch.save(ckpt_data, path)
             print(f"  New best val loss: {best_val_loss:.4f} -> {path}")
 
+        # Best depth RMSE (per-task checkpoint)
+        if val_rmse < best_depth_rmse:
+            best_depth_rmse = val_rmse
+            ckpt_data["best_depth_rmse"] = best_depth_rmse
+            path = os.path.join(cfg.CHECKPOINT_DIR, "best_depth.pt")
+            torch.save(ckpt_data, path)
+            print(f"  New best depth RMSE: {val_rmse:.4f}m -> {path}")
+
+        # Best seg mIoU (per-task checkpoint)
+        if val_miou > best_seg_miou:
+            best_seg_miou = val_miou
+            ckpt_data["best_seg_miou"] = best_seg_miou
+            path = os.path.join(cfg.CHECKPOINT_DIR, "best_seg.pt")
+            torch.save(ckpt_data, path)
+            print(f"  New best seg mIoU: {val_miou*100:.1f}% -> {path}")
+
     # Save final checkpoint
     final_path = os.path.join(cfg.CHECKPOINT_DIR, "final.pt")
     torch.save(ckpt_data, final_path)
     print(f"\nTraining complete. Final checkpoint: {final_path}")
     print(f"Best val loss: {best_val_loss:.4f}")
+    print(f"Best depth RMSE: {best_depth_rmse:.4f}m")
+    print(f"Best seg mIoU: {best_seg_miou*100:.1f}%")
 
     writer.close()
 
