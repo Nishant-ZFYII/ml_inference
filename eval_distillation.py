@@ -30,7 +30,9 @@ from models.student import build_student
 def load_model(checkpoint_path: str, device: torch.device, cfg: Config):
     model = build_student(num_classes=cfg.NUM_CLASSES, pretrained=False)
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    if "model_state_dict" in ckpt:
+    if "model" in ckpt:
+        model.load_state_dict(ckpt["model"])
+    elif "model_state_dict" in ckpt:
         model.load_state_dict(ckpt["model_state_dict"])
     else:
         model.load_state_dict(ckpt)
