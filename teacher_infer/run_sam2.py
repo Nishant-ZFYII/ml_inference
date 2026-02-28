@@ -60,37 +60,30 @@ def load_yolo():
     return model
 
 
-def load_sam2(device: torch.device):
+def load_sam2(device: torch.device, checkpoint: str = None):
     """
     Load SAM2 model for mask refinement.
 
-    Tries sam2 package first, falls back to segment-anything.
+    Args:
+        checkpoint: path to sam2_hiera_large.pt (required when not using
+                    the bundled weights from the sam2 package install)
     """
     try:
         from sam2.build_sam import build_sam2
         from sam2.sam2_image_predictor import SAM2ImagePredictor
 
+        ckpt = checkpoint or "sam2_hiera_large.pt"
         sam2_model = build_sam2(
             "sam2_hiera_large",
-            "sam2_hiera_large.pt",
+            ckpt,
             device=device,
         )
         predictor = SAM2ImagePredictor(sam2_model)
         return predictor, "sam2"
-    except Exception:
-        pass
-
-    try:
-        from segment_anything import sam_model_registry, SamPredictor
-
-        sam = sam_model_registry["vit_h"](
-            checkpoint="sam_vit_h_4b8939.pth")
-        sam = sam.to(device)
-        predictor = SamPredictor(sam)
-        return predictor, "sam1"
     except Exception as e:
         raise RuntimeError(
-            f"Could not load SAM2 or SAM. Install sam2 package. Error: {e}")
+            f"Could not load SAM2. Ensure sam2 is installed and "
+            f"--sam2-checkpoint points to sam2_hiera_large.pt. Error: {e}")
 
 
 def refine_box_with_sam(predictor, image_np: np.ndarray,
@@ -243,6 +236,8 @@ def main():
     p.add_argument("--output-dir", type=str, required=True)
     p.add_argument("--depth-dir", type=str, default=None,
                    help="Directory of depth .npy files for geometric heuristics")
+    p.add_argument("--sam2-checkpoint", type=str, default=None,
+                   help="Path to sam2_hiera_large.pt checkpoint file")
     p.add_argument("--device", type=str, default=None)
     args = p.parse_args()
 
@@ -269,7 +264,7 @@ def main():
     print("Loading YOLOv8...")
     yolo_model = load_yolo()
     print("Loading SAM2...")
-    sam_predictor, sam_backend = load_sam2(device)
+    sam_predictor, sam_backend = load_sam2(device, args.sam2_checkpoint)
     print(f"SAM backend: {sam_backend}")
 
     for img_path in tqdm(image_files, desc="YOLO+SAM2 labeling"):

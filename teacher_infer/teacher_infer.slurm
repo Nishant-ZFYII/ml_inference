@@ -34,6 +34,7 @@ export PYTHONNOUSERSITE=True
 
 REPO_DIR=$HOME/ml_pipeline
 DATA_DIR=$SCRATCH/nyu_teacher_data
+SAM2_CKPT=$SCRATCH/model_weights/sam2_hiera_large.pt
 
 # Install teacher-specific dependencies (only needed once)
 pip install -q depth-anything-v2 ultralytics segment-anything-2 2>/dev/null || true
@@ -79,7 +80,8 @@ OUTPUT_SAM2=$DATA_DIR/sam2_seg
 python -m teacher_infer.run_sam2 \
     --input-dir $INPUT_RGB \
     --depth-dir $INPUT_DEPTH \
-    --output-dir $OUTPUT_SAM2
+    --output-dir $OUTPUT_SAM2 \
+    --sam2-checkpoint $SAM2_CKPT
 
 # ── Step 4: Build manifest ─────────────────────────────────────────────────
 echo "=== Step 4: Building manifest ==="
