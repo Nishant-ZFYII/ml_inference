@@ -9,6 +9,8 @@ build/
 # Data (downloaded at runtime)
 data/
 corridor_data/
+corridor_eval_data/
+*.tar.gz
 
 # Training outputs
 checkpoints/

@@ -865,8 +865,32 @@ $f_y=521.0$. Averaged for DA3: $f_x=519.1$, $f_y=518.75$.
     (demonstrates dataset-agnosticism)
 \end{enumerate}
 
-\textbf{Status:} Code complete. TUM teacher inference in progress
-(DA3 complete: 1773/1773, SAM2 running).
+\subsubsection{Training Results}
+
+Training on 5316 TUM frames (after re-running DA3 on all frames to fix
+a stale-cache misalignment issue). The Kendall uncertainty weighting
+destabilised rapidly: $w_d$ exploded from 1.6 to 12.8, meaning the model
+expressed extreme uncertainty on depth and effectively gave up on that
+task. Negative train loss appeared at \textbf{epoch 28} --- far earlier
+than B1/NYU (epoch $\sim$115).
+
+Best per-task metrics during training:
+\begin{itemize}[nosep]
+  \item \texttt{best\_depth.pt} --- epoch 6 (RMSE 1.22\,m)
+  \item \texttt{best\_seg.pt} --- epoch 96 (mIoU 35.5\%)
+\end{itemize}
+
+Both are worse than Iter 6 (B1/NYU): depth 1.22\,m vs 0.998\,m,
+seg 35.5\% vs 46.5\%. The additional TUM frames did not help.
+
+\textbf{Root cause --- temporal redundancy:} TUM RGB-D sequences are
+captured at 30\,fps. Even with subsample=1, consecutive frames are
+near-identical. The 5316 ``unique'' frames contain $\sim$500 truly
+independent viewpoints repeated $\sim$10 times each. This is not
+equivalent to 5316 diverse training images.
+
+\textbf{Status:} Training complete. Results below expectations;
+B1/NYU (Iter 6) remains the best configuration.
 
 \subsection{Iteration 7b: EfficientViT-B2 on NYU (Pending)}
 
@@ -901,8 +925,123 @@ If B2 improves significantly, backbone capacity was the bottleneck.
 If B2 does not improve (or overfits more), then data size is the
 bottleneck --- confirming the TUM experiment (Iter 7) as the right path.
 
-\textbf{Status:} Code complete. Can run in parallel with Iter 7 teacher
-inference.
+\subsubsection{Training Results}
+
+B2 (15.76M params) trained on the same NYU data as Iter 6.
+Best per-task metrics during training:
+\begin{itemize}[nosep]
+  \item \texttt{best\_depth.pt} --- epoch 14 (RMSE 1.20\,m)
+  \item \texttt{best\_seg.pt} --- epoch 112 (mIoU 41.1\%)
+\end{itemize}
+
+Negative train loss appeared at epoch 92 (vs B1's epoch $\sim$115).
+
+\subsubsection{Formal Evaluation}
+
+\begin{table}[h]
+\centering
+\caption{Iter 7b (B2/NYU) vs Iter 6 (B1/NYU): per-task checkpoints}
+\label{tab:b2-eval}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Metric} & \textbf{B1 depth} & \textbf{B2 depth} & \textbf{B1 seg} & \textbf{B2 seg} \\
+                 & \textbf{(ep 39)} & \textbf{(ep 14)} & \textbf{(ep 152)} & \textbf{(ep 112)} \\
+\midrule
+Depth RMSE       & \textcolor{improved}{\textbf{0.998 m}} & 1.126 m & 1.833 m & 1.730 m \\
+MAE              & \textcolor{improved}{\textbf{0.780 m}} & 0.890 m & 1.713 m & 1.618 m \\
+AbsRel           & \textcolor{improved}{\textbf{0.255}}   & 0.285   & 0.572   & 0.537 \\
+$\delta < 1.25$  & \textcolor{improved}{\textbf{57.9\%}}  & 49.8\%  & 13.4\%  & 15.0\% \\
+\midrule
+Seg mIoU         & 24.1\% & 28.8\% & 46.5\% & \textcolor{improved}{\textbf{50.2\%}} \\
+\quad floor      & 39.5\% & 51.5\% & 63.5\% & \textcolor{improved}{\textbf{67.6\%}} \\
+\quad wall       & 1.3\%  & 0.0\%  & 16.6\% & \textcolor{improved}{\textbf{22.2\%}} \\
+\quad person     & 0.0\%  & 0.0\%  & 40.8\% & \textcolor{improved}{\textbf{45.1\%}} \\
+\quad furniture  & 40.8\% & 45.0\% & 61.2\% & \textcolor{improved}{\textbf{64.6\%}} \\
+\quad glass      & NaN    & NaN    & NaN    & NaN \\
+\quad other      & 39.0\% & 47.7\% & 50.4\% & \textcolor{improved}{\textbf{51.4\%}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Analysis}
+
+\textbf{B2 sets a new segmentation record: 50.2\% mIoU} ($+3.7$pp over
+B1's 46.5\%). Every class improved: person $+4.3$pp, wall $+5.6$pp,
+furniture $+3.4$pp, floor $+4.1$pp. The extra capacity directly helped
+the classification task.
+
+\textbf{B1 still wins on depth: 0.998\,m vs 1.126\,m.} B2 overfits
+depth faster (best at epoch 14 vs B1's epoch 39) and produces 13\%
+worse RMSE. The regression task suffers from the extra capacity on
+small data.
+
+\textbf{Conclusion:} The bottleneck is task-dependent. Segmentation
+benefits from more parameters; depth benefits from fewer (less
+overfitting). For deployment, the optimal strategy is to use
+B1 \texttt{best\_depth.pt} for depth and B2 \texttt{best\_seg.pt}
+for segmentation --- or a single B1 model if latency is paramount.
+
+\textbf{Status:} Evaluation complete.
+
+\subsection{Iteration 8: Corridor Depth Evaluation}
+
+All prior evaluations measured depth RMSE against NYU Depth V2 ground truth
+--- cluttered indoor scenes with depth ranging 0.3--10\,m. The deployment
+corridor is geometrically simpler (two parallel walls, floor, ceiling;
+depth distribution centred around 0.9\,m). The NYU RMSE of 1.0\,m may
+overstate the error in the actual deployment environment.
+
+\subsubsection{Data Source}
+
+An 81-second MCAP rosbag from the Orbbec Femto Bolt on the Ackermann robot:
+\begin{itemize}[nosep]
+  \item 2,454 RGB frames (1280$\times$720, \texttt{rgb8})
+  \item 2,454 depth frames (640$\times$576, \texttt{16UC1}, mm)
+  \item After subsample=5 and timestamp association: \textbf{459 frame pairs}
+  \item 62.9\% valid depth pixels; 37.1\% dead pixels (sensor failure on
+    reflective floor, close-range walls, and specular surfaces)
+  \item Camera intrinsics: $f_x=747.8$, $f_y=747.5$, $c_x=643.4$, $c_y=347.9$
+\end{itemize}
+
+\subsubsection{Methodology}
+
+\begin{enumerate}[nosep]
+  \item Extract frames with \texttt{extract\_corridor\_bag.py} (local, no GPU)
+  \item Transfer to HPC via \texttt{scp}
+  \item Run \texttt{eval\_corridor\_depth.py} with existing checkpoints
+    (\texttt{best\_depth.pt} from Iter 6 and Iter 7b)
+  \item Compare student predictions against sensor depth on valid pixels
+    ($0.1 \leq d \leq 5.0$\,m), with per-bin and spatial breakdowns
+\end{enumerate}
+
+\subsubsection{Why This Matters}
+
+\begin{itemize}[nosep]
+  \item If corridor RMSE is 0.3--0.5\,m $\to$ depth distillation is viable
+    for navigation. The student handles the simple corridor geometry well
+    despite poor NYU generalization.
+  \item If corridor RMSE is still 0.8--1.0\,m $\to$ depth distillation
+    is not viable. Pivot to running DA3-Small directly via TensorRT on
+    Jetson (43+\,FPS per GerdsenAI ROS2 Wrapper benchmarks).
+  \item The sensor failure pixels (37.1\%) demonstrate why monocular depth
+    estimation is needed: the ToF sensor fails on reflective corridor floors.
+\end{itemize}
+
+\subsubsection{Pipeline Changes}
+
+\begin{itemize}[nosep]
+  \item \texttt{teacher\_infer/extract\_corridor\_bag.py} (NEW): Extracts
+    RGB + depth from Orbbec Femto Bolt MCAP rosbags with configurable
+    subsampling. Converts \texttt{16UC1} mm to \texttt{float32} metres.
+  \item \texttt{eval\_corridor\_depth.py} (NEW): Depth-only evaluation
+    against sensor depth. Reports per-bin breakdown (near/mid/far) and
+    top/bottom image split (walls vs floor).
+  \item \texttt{eval\_corridor.slurm} (NEW): SLURM script that evaluates
+    both B1 and B2 \texttt{best\_depth.pt} checkpoints.
+\end{itemize}
+
+\textbf{Status:} Extraction complete (459 frames). Awaiting HPC transfer
+and evaluation run.
 
 % ============================================================================
 \section{Comparison: v1 vs v3}
@@ -929,20 +1068,22 @@ Conversion formula & None                   & $f \cdot d_{\text{raw}} / 300$ \\
 
 \begin{table}[h]
 \centering
-\caption{Evaluation comparison: Student vs Teacher (all iterations)}
+\caption{Best results per task across all experiments (per-task checkpoints)}
 \label{tab:eval-compare}
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lrrrr}
 \toprule
-\textbf{Metric} & \textbf{v3 Iter 2} & \textbf{v3 Iter 5} & \textbf{Iter 6 best} & \textbf{Iter 6 depth} & \textbf{Iter 6 seg} \\
+\textbf{Metric} & \textbf{B1/NYU depth} & \textbf{B1/NYU seg} & \textbf{B2/NYU depth} & \textbf{B2/NYU seg} \\
+               & \textbf{(Iter 6)} & \textbf{(Iter 6)} & \textbf{(Iter 7b)} & \textbf{(Iter 7b)} \\
 \midrule
-Depth RMSE     & 1.000 m & \textcolor{improved}{\textbf{0.993 m}} & 1.128 m & 0.998 m & 1.833 m \\
-MAE            & \textcolor{improved}{\textbf{0.783 m}} & 0.799 m & 0.965 m & \textcolor{improved}{\textbf{0.780 m}} & 1.713 m \\
-AbsRel         & \textcolor{improved}{\textbf{0.238}}   & 0.249   & 0.346   & 0.255   & 0.572 \\
-$\delta<1.25$  & 57.1\%  & 56.7\%  & 46.4\%  & \textcolor{improved}{\textbf{57.9\%}}  & 13.4\% \\
-Seg mIoU       & 19.2\%  & 30.0\%  & 30.3\%  & 24.1\%  & \textcolor{improved}{\textbf{46.5\%}} \\
+Depth RMSE     & \textcolor{improved}{\textbf{0.998 m}} & 1.833 m & 1.126 m & 1.730 m \\
+MAE            & \textcolor{improved}{\textbf{0.780 m}} & 1.713 m & 0.890 m & 1.618 m \\
+AbsRel         & \textcolor{improved}{\textbf{0.255}}   & 0.572   & 0.285   & 0.537 \\
+$\delta<1.25$  & \textcolor{improved}{\textbf{57.9\%}}  & 13.4\%  & 49.8\%  & 15.0\% \\
+\midrule
+Seg mIoU       & 24.1\%  & 46.5\%  & 28.8\%  & \textcolor{improved}{\textbf{50.2\%}} \\
 \bottomrule
-\multicolumn{6}{l}{\footnotesize Iter 2 used GT depth on $\sim$80\% of samples. Iters 5--6 are pure distillation.} \\
-\multicolumn{6}{l}{\footnotesize Iter 6 depth/seg columns use per-task best checkpoints (epochs 39/152).}
+\multicolumn{5}{l}{\footnotesize All results are pure distillation (no GT in training). Per-task best checkpoints.} \\
+\multicolumn{5}{l}{\footnotesize Best depth: B1 ep 39. Best seg: B2 ep 112. B1/TUM omitted (underperformed).}
 \end{tabular}
 \end{table}
 
@@ -988,48 +1129,67 @@ malformed teacher output.
 \label{sec:future}
 % ============================================================================
 
-The following directions would directly improve results but are beyond
-the scope of Iterations 1--6.
+Revised based on Iterations 7 and 7b experimental results.
 
-\subsection{Larger Training Data}
+\subsection{Lessons from Iters 7/7b}
 
-NYU Depth V2 provides only 1159 training images --- too small for robust
-multi-task distillation. The pipeline is dataset-agnostic: only teacher
-inference (DA3 + YOLO + SAM2) needs to run on new data.
+\begin{enumerate}
+  \item \textbf{Temporal video data $\neq$ more unique data.}
+    TUM RGB-D (5316 frames from 3 sequences at 30\,fps) performed
+    \emph{worse} than NYU (1449 independent images) because consecutive
+    frames are near-identical. Frame count is not diversity count.
 
-\begin{itemize}[nosep]
-  \item \textbf{TUM RGB-D} (10--15k frames): Indoor sequences with
-    ground-truth depth from Kinect. Freely downloadable.
-  \item \textbf{DIODE} (25k frames): Indoor + outdoor, structured-light
-    depth. Large and diverse.
-  \item \textbf{Hypersim} (77k frames): Photorealistic synthetic indoor
-    scenes. No domain gap issues with teacher models.
-\end{itemize}
+  \item \textbf{Backbone scaling is task-dependent.}
+    B2 (15.8M) improved segmentation ($+3.7$pp mIoU) but worsened
+    depth ($+13\%$ RMSE) on the same data. More parameters help
+    classification but hurt regression when data is limited.
 
-Strategy: train on a larger dataset, keep NYU as a held-out evaluation
-benchmark. This demonstrates dataset-agnosticism and eliminates the
-small-dataset bottleneck.
+  \item \textbf{Kendall uncertainty weighting is unstable.}
+    The $\log \sigma^2$ blow-up appeared in all three experiments,
+    earliest on TUM (epoch 28), then B2/NYU (epoch 92), then B1/NYU
+    (epoch 115). The formulation needs clamping or replacement.
+\end{enumerate}
 
-\subsection{Larger Student Backbone}
+\subsection{Recommended Next Steps (Priority Order)}
 
-EfficientViT-B1 (5.3M params) was chosen for edge deployment. If latency
-budget allows, scaling to B2 (15.4M params) or B3 (39.2M params) would
-increase capacity. Given the 4$\times$ RMSE gap between teacher (DA3,
-$\sim$0.25\,m) and student (0.993\,m), a larger backbone may close this
-substantially.
+\subsubsection{1. Fix the Loss --- Clamp or Replace Kendall (Highest Impact)}
 
-\subsection{Loss Formulation Improvements}
+The Kendall uncertainty weighting is the root cause of training
+instability across all experiments. Two options:
 
 \begin{itemize}[nosep]
-  \item \textbf{Clamp $\log \sigma^2$:} Restrict to $[-4, 4]$ to prevent
-    the negative-loss loophole in Kendall uncertainty weighting.
-  \item \textbf{GradNorm} (Chen et al.\ 2018): Dynamically balance task
-    gradients by their relative training rates, avoiding the variance
-    blow-up issue.
-  \item \textbf{Two-phase training:} Train jointly for 50 epochs
-    (captures depth), then freeze the depth decoder and continue
-    training segmentation only. Avoids depth overfitting in later epochs.
+  \item \textbf{Clamp $\log \sigma^2$ to $[-4, 4]$}: Prevents
+    variance blow-up while preserving adaptive weighting. One line
+    of code in \texttt{losses.py}.
+  \item \textbf{GradNorm} (Chen et al.\ 2018): Balances tasks by
+    gradient magnitudes instead of learned variance. More robust
+    but requires tracking gradient norms per task.
 \end{itemize}
+
+This alone could allow B1 to train stably for 200 epochs, potentially
+improving both depth and seg in a single checkpoint.
+
+\subsubsection{2. Two-Phase Training (Moderate Impact)}
+
+Train jointly for 40 epochs (captures depth optimum), then freeze
+depth decoder and train segmentation only. This directly addresses
+the multi-task divergence without any loss formulation changes.
+Already supported via \texttt{-{}-freeze-encoder}.
+
+\subsubsection{3. Diverse Training Data (If Time Permits)}
+
+If additional data is pursued, it must be \emph{diverse independent
+images}, not video sequences. Candidates:
+\begin{itemize}[nosep]
+  \item \textbf{Hypersim} (77k synthetic frames): Each frame is a
+    unique rendered viewpoint. No temporal redundancy.
+  \item \textbf{DIODE} (25k frames): Captured as independent
+    photographs, not video sequences.
+\end{itemize}
+
+TUM RGB-D and similar video datasets are not suitable without
+aggressive deduplication (e.g.\ perceptual hashing to select
+visually distinct keyframes).
 
 \subsection{TensorRT Deployment Benchmark}
 
@@ -1046,31 +1206,30 @@ can proceed with the current checkpoints.
   \item \textbf{Multi-task divergence (partially solved):} Per-task
     checkpointing (Iter 6) captures both optima: depth at epoch 39,
     seg at epoch 152. Uncertainty weighting helped seg significantly
-    (46.5\% vs 30.0\%) but did not improve depth. A unified model that
-    is optimal at both tasks simultaneously remains unsolved; two-phase
-    training (freeze depth decoder after convergence) is future work.
+    (46.5\% $\to$ 50.2\% with B2) but did not improve depth. A unified
+    model optimal at both tasks simultaneously remains unsolved.
 
-  \item \textbf{Negative train loss (Iter 6):} The Kendall uncertainty
-    formulation allows loss to go negative when log-variance grows
-    unbounded. Training after epoch $\sim$115 is not meaningful. Clamping
-    $\log \sigma^2$ or using a different weighting scheme may help.
+  \item \textbf{Negative train loss (Iters 6, 7, 7b):} The Kendall
+    uncertainty formulation allows loss to go negative when
+    $\log \sigma^2$ grows unbounded. Appeared in \emph{all three}
+    experiments: epoch 28 (TUM), 92 (B2/NYU), 115 (B1/NYU).
+    \textbf{Highest-priority fix:} clamp $\log \sigma^2$ to $[-4, 4]$.
 
-  \item \textbf{Small training set:} 1159 training samples limits
-    generalisation. Cross-dataset training on TUM RGB-D or DIODE
-    (10--25k frames) would likely improve both tasks.
+  \item \textbf{Video data is not diverse data:} TUM RGB-D (5316 frames)
+    performed worse than NYU (1449 images) because consecutive video
+    frames are near-identical. Future data sources must provide
+    independent viewpoints, not video sequences.
 
-  \item \textbf{Person class:} Iter 6 \texttt{best\_seg.pt} achieves
-    40.8\% person IoU (up from 0.0\% in all prior iterations). Glass
-    remains NaN (too few pixels in NYU).
+  \item \textbf{Backbone--task mismatch:} B2 improves seg but worsens
+    depth on the same data. The optimal architecture differs by task,
+    suggesting that task-specific heads (or even separate models) may
+    outperform a single multi-task model.
+
+  \item \textbf{Person class:} B2 achieves 45.1\% person IoU (up from
+    0.0\% pre-Iter 6). Glass remains NaN (too few pixels in NYU).
 
   \item \textbf{Table III (TensorRT):} Export to ONNX + TensorRT and
-    benchmark on Jetson. Architecture-dependent, not training-dependent,
-    so can proceed now.
-
-  \item \textbf{Cross-dataset generalisation:} Train on a larger dataset
-    (TUM RGB-D, DIODE, or Hypersim), evaluate on NYU as a held-out
-    benchmark. Demonstrates dataset-agnosticism and eliminates the
-    small-dataset problem.
+    benchmark on Jetson. Can proceed with current checkpoints.
 \end{enumerate}
 
 % ============================================================================
@@ -1112,6 +1271,9 @@ can proceed with the current checkpoints.
 \texttt{setup\_hpc.sh}         & anaconda3/2025.06, DA3 source install, timm, SAM2 checkpoint download \\
 \texttt{requirements.txt}      & Added \texttt{timm} \\
 \texttt{README.md}             & Complete rewrite for v3 architecture \\
+\texttt{teacher\_infer/extract\_corridor\_bag.py} & NEW: Extract RGB+depth from Orbbec Femto Bolt MCAP rosbags \\
+\texttt{eval\_corridor\_depth.py} & NEW: Depth-only eval against sensor depth with per-bin and spatial breakdown \\
+\texttt{eval\_corridor.slurm}  & NEW: SLURM script for corridor depth evaluation (B1 + B2) \\
 \bottomrule
 \end{longtable}
 
@@ -1150,6 +1312,10 @@ Feb 28, 2026 & Iter 6: uncertainty weighting + per-task checkpoints \\
 Feb 28, 2026 & Iter 6 eval: depth RMSE 0.998m (best\_depth), seg mIoU 46.5\% (best\_seg) \\
 Feb 28, 2026 & Iter 7: TUM RGB-D integration (prep script, loader, teacher SLURM, train SLURM) \\
 Feb 28, 2026 & Iter 7b: EfficientViT-B2 backbone experiment on NYU (code ready) \\
+Feb 28, 2026 & Iter 7 training complete: B1/TUM underperforms B1/NYU (temporal redundancy) \\
+Feb 28, 2026 & Iter 7b training + eval complete: B2 seg 50.2\% mIoU ($+3.7$pp), depth worse \\
+Feb 28, 2026 & Diagnosis: video data $\neq$ diverse data; Kendall unstable in all experiments \\
+Feb 28, 2026 & Iter 8: Corridor eval pipeline (extract 459 frames from Femto Bolt rosbag) \\
 \bottomrule
 \end{longtable}
 
