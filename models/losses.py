@@ -29,17 +29,19 @@ class HybridDepthLoss(nn.Module):
 
     Two modes controlled by `distill_depth`:
 
-    distill_depth=True  (pure distillation, use for NYU stand-in):
-        target = DA3 depth everywhere DA3 is available.
-        Falls back to GT/ToF only when DA3 is missing.
+    distill_depth=False (default -- use GT/ToF as primary target):
+        Where ToF confidence >= tau  →  supervise to ToF/GT depth
+        Where ToF confidence <  tau  →  supervise to DA3
+        For NYU (confidence always 1.0), this uses clean GT depth.
+        For corridor data with real ToF, this blends ToF + DA3.
 
-    distill_depth=False (hybrid, use for corridor data with real ToF):
-        Where ToF confidence >= tau  →  supervise to ToF (real sensor)
-        Where ToF confidence <  tau  →  supervise to DA3 (neural depth)
+    distill_depth=True (pure distillation -- use DA3 as sole target):
+        target = DA3 depth everywhere. Use only when no GT is available
+        (e.g. unlabeled corridor data). Produces noisier training signal.
     """
 
     def __init__(self, confidence_threshold: float = 0.5,
-                 distill_depth: bool = True):
+                 distill_depth: bool = False):
         super().__init__()
         self.tau = confidence_threshold
         self.distill_depth = distill_depth
