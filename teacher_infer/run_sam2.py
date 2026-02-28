@@ -65,25 +65,36 @@ def load_sam2(device: torch.device, checkpoint: str = None):
     Load SAM2 model for mask refinement.
 
     Args:
-        checkpoint: path to sam2_hiera_large.pt (required when not using
-                    the bundled weights from the sam2 package install)
+        checkpoint: path to sam2_hiera_large.pt checkpoint file
     """
-    try:
-        from sam2.build_sam import build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-        ckpt = checkpoint or "sam2_hiera_large.pt"
-        sam2_model = build_sam2(
-            "sam2_hiera_large.yaml",
-            ckpt,
-            device=device,
-        )
-        predictor = SAM2ImagePredictor(sam2_model)
-        return predictor, "sam2"
-    except Exception as e:
-        raise RuntimeError(
-            f"Could not load SAM2. Ensure sam2 is installed and "
-            f"--sam2-checkpoint points to sam2_hiera_large.pt. Error: {e}")
+    ckpt = checkpoint or "sam2_hiera_large.pt"
+
+    config_candidates = [
+        "configs/sam2/sam2_hiera_l.yaml",
+        "configs/sam2.1/sam2.1_hiera_l.yaml",
+        "sam2_hiera_l.yaml",
+        "sam2_hiera_l",
+    ]
+
+    for cfg_name in config_candidates:
+        try:
+            sam2_model = build_sam2(cfg_name, ckpt, device=device)
+            predictor = SAM2ImagePredictor(sam2_model)
+            print(f"SAM2 loaded with config: {cfg_name}")
+            return predictor, "sam2"
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        f"Could not load SAM2. Tried configs: {config_candidates}. "
+        f"Checkpoint: {ckpt}. Run on HPC: "
+        f"python -c \"import sam2, os; os.system('find ' + "
+        f"os.path.dirname(sam2.__file__) + ' -name *.yaml')\" "
+        f"to see available configs."
+    )
 
 
 def refine_box_with_sam(predictor, image_np: np.ndarray,
