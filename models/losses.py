@@ -25,25 +25,23 @@ def _image_gradients(x: torch.Tensor):
 
 class HybridDepthLoss(nn.Module):
     """
-    L1 depth loss for DA3 knowledge distillation.
+    L1 depth loss for pure DA3 knowledge distillation.
 
     When DA3 teacher depth is available, the student is supervised
-    against DA3 predictions (pure distillation). When GT/ToF depth is
-    also available, a secondary L1 term anchors the student to the
-    sensor reading, weighted by `gt_blend` (default 0.3).
+    solely against DA3 predictions. No GT/sensor depth is used in the
+    loss -- GT is only for evaluation benchmarking.
 
-        L_depth = L1(pred, da3) + gt_blend * L1(pred, gt)
+    This keeps the pipeline dataset-agnostic: swap NYU for TUM, corridor
+    data, or any other dataset and nothing changes. Teachers generate
+    labels, student learns from teachers.
 
-    This stabilises training: DA3 provides the distillation signal
-    while GT prevents the student from overfitting to DA3's errors.
-    For corridor data without GT, set gt_blend=0.
+    Falls back to GT/ToF only when DA3 labels are not available
+    (e.g. samples not covered by the manifest).
     """
 
-    def __init__(self, confidence_threshold: float = 0.5,
-                 gt_blend: float = 0.3):
+    def __init__(self, confidence_threshold: float = 0.5):
         super().__init__()
         self.tau = confidence_threshold
-        self.gt_blend = gt_blend
 
     def forward(
         self,
@@ -55,29 +53,15 @@ class HybridDepthLoss(nn.Module):
     ) -> torch.Tensor:
 
         if has_da3 and da3_depth is not None:
-            valid_da3 = da3_depth > 0
-            if valid_da3.sum() == 0:
-                target = tof_depth
-                valid = target > 0
-                if valid.sum() == 0:
-                    return pred_depth.sum() * 0.0
-                return F.l1_loss(pred_depth[valid], target[valid])
-
-            loss_da3 = F.l1_loss(pred_depth[valid_da3], da3_depth[valid_da3])
-
-            if self.gt_blend > 0:
-                valid_gt = tof_depth > 0
-                if valid_gt.sum() > 0:
-                    loss_gt = F.l1_loss(pred_depth[valid_gt], tof_depth[valid_gt])
-                    return loss_da3 + self.gt_blend * loss_gt
-
-            return loss_da3
+            target = da3_depth
         else:
             target = tof_depth
-            valid = target > 0
-            if valid.sum() == 0:
-                return pred_depth.sum() * 0.0
-            return F.l1_loss(pred_depth[valid], target[valid])
+
+        valid = target > 0
+        if valid.sum() == 0:
+            return pred_depth.sum() * 0.0
+
+        return F.l1_loss(pred_depth[valid], target[valid])
 
 
 class EdgeAwareSmoothness(nn.Module):
@@ -121,14 +105,13 @@ class MultiTaskLoss(nn.Module):
         lambda_edge: float = 0.1,
         confidence_threshold: float = 0.5,
         num_classes: int = 6,
-        gt_blend: float = 0.3,
     ):
         super().__init__()
         self.lambda_depth = lambda_depth
         self.lambda_seg = lambda_seg
         self.lambda_edge = lambda_edge
 
-        self.depth_loss = HybridDepthLoss(confidence_threshold, gt_blend)
+        self.depth_loss = HybridDepthLoss(confidence_threshold)
         self.edge_loss = EdgeAwareSmoothness()
         self.seg_loss = nn.CrossEntropyLoss(ignore_index=255)
 

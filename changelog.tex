@@ -508,26 +508,41 @@ where $\alpha$ controls the GT anchoring strength. The DA3 term provides
 the distillation signal (required for the paper's narrative), while the
 GT term prevents the student from overfitting to DA3's errors.
 
-\subsection{Iteration 4: Blended Distillation (Pending)}
+\subsection{Iteration 4: Pure Distillation with Lower LR (Pending)}
 
-Based on the Iteration 3 analysis, the depth loss was redesigned:
+The blended loss approach (\texttt{gt\_blend}) was rejected because it
+violates the pipeline's design principle: \textbf{GT is only for
+evaluation, never for training.} If GT is required in the loss, the
+pipeline breaks on any dataset without ground truth (corridor data,
+TUM, or any unlabeled collection). The paper claims knowledge
+distillation from DA3 --- the training must work without GT.
+
+Instead, the Iteration 3 regression was addressed by tuning the
+optimisation, not the loss function:
+
+\begin{itemize}[nosep]
+  \item \textbf{Learning rate:} $10^{-3} \to 3 \times 10^{-4}$. DA3 targets
+    are noisier than NYU GT; a lower LR gives the model more time to
+    average over the noise rather than overfitting to it.
+  \item \textbf{Epochs:} $100 \to 200$. More passes over the data compensate
+    for the slower learning rate.
+\end{itemize}
+
+The loss function is now clean and dataset-agnostic:
 
 \begin{lstlisting}[language=Python]
-# Primary: distill from DA3 teacher
-loss_da3 = L1(pred, da3_depth)
-# Secondary: anchor to GT sensor reading
-loss_gt  = L1(pred, gt_depth)
-# Blended
-L_depth  = loss_da3 + 0.3 * loss_gt
+# Depth: pure DA3 distillation (no GT in loss)
+L_depth = L1(pred_depth, da3_depth)
+# Seg: pure SAM2 distillation
+L_seg   = CrossEntropy(pred_seg, sam2_labels)
+# Edge: regulariser
+L_edge  = EdgeSmooth(pred_depth, rgb)
+# Total
+L = 1.0 * L_depth + 0.5 * L_seg + 0.1 * L_edge
 \end{lstlisting}
 
-This maintains DA3 as the \emph{primary} training target (the paper's
-claim is knowledge distillation from DA3), while using GT as a
-regulariser to stabilise training. Segmentation continues to train on
-SAM2 labels.
-
-The \texttt{gt\_blend} parameter defaults to 0.3 and can be set to 0.0
-for corridor data where no GT depth exists.
+Swap NYU for TUM, corridor, or any other dataset --- run DA3 and SAM2
+on the RGB images, generate a manifest, and retrain. No code changes.
 
 \textbf{Status:} Submitted for training. Results pending.
 
@@ -698,7 +713,8 @@ Feb 2026 & v3 Iter 2 training: RMSE 1.07m vs DA3 (manifest used but confidence m
 Feb 27, 2026 & v3 Iter 2 eval: RMSE 1.00m, AbsRel 0.238, mIoU 19.2\% \\
 Feb 27, 2026 & Iter 3: pure DA3+SAM2 distillation --- regressed (RMSE 1.13m) \\
 Feb 27, 2026 & Root cause: DA3 noisier than NYU GT; pure distillation unstable \\
-Feb 27, 2026 & Iter 4: blended loss $L_{\text{da3}} + 0.3 \cdot L_{\text{gt}}$ (submitted) \\
+Feb 27, 2026 & Blended loss (gt\_blend) rejected --- GT must not be in training loss \\
+Feb 28, 2026 & Iter 4: pure distillation, LR $3 \times 10^{-4}$, 200 epochs (submitted) \\
 \bottomrule
 \end{longtable}
 

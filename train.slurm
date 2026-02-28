@@ -47,7 +47,8 @@ python train.py \
     --checkpoint-dir "$SCRATCH/checkpoints" \
     --log-dir "$SCRATCH/runs" \
     --manifest "$SCRATCH/nyu_teacher_data/manifest.jsonl" \
-    --epochs 100 \
+    --epochs 200 \
+    --lr 3e-4 \
     --batch-size 16 \
     --num-workers 8
 
