@@ -26,7 +26,6 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from config import Config
-from dataset.nyu_loader import get_dataloaders
 from models.student import build_student
 from models.losses import MultiTaskLoss
 
@@ -49,6 +48,9 @@ def parse_args():
     p.add_argument("--uncertainty-weighting", action="store_true",
                    help="Use Kendall et al. learned task weighting")
     p.add_argument("--num-workers", type=int, default=None)
+    p.add_argument("--dataset", type=str, default="nyu",
+                   choices=["nyu", "tum", "corridor"],
+                   help="Dataset to train on (default: nyu)")
     return p.parse_args()
 
 
@@ -218,8 +220,16 @@ def main():
     os.makedirs(cfg.LOG_DIR, exist_ok=True)
 
     # Data
-    print("Loading data...")
-    train_loader, val_loader = get_dataloaders(cfg)
+    print(f"Loading data (dataset={args.dataset})...")
+    if args.dataset == "tum":
+        from dataset.tum_loader import get_tum_dataloaders
+        train_loader, val_loader = get_tum_dataloaders(cfg)
+    elif args.dataset == "corridor":
+        from dataset.corridor_loader import get_corridor_dataloaders
+        train_loader, val_loader = get_corridor_dataloaders(cfg)
+    else:
+        from dataset.nyu_loader import get_dataloaders
+        train_loader, val_loader = get_dataloaders(cfg)
     print(f"Train: {len(train_loader.dataset)} samples, "
           f"Val: {len(val_loader.dataset)} samples")
 

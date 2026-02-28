@@ -637,8 +637,46 @@ decent depth (1.33\,m) but suboptimal seg (29.5\% vs achievable 35.8\%).
 This means the \texttt{best.pt} checkpoint underperforms on segmentation
 by $\sim$6 percentage points compared to what the model can achieve.
 
-\textbf{Status:} Training complete. Formal evaluation running on
-\texttt{best.pt} (epoch 42). Results for Table IV pending.
+\subsubsection{Formal Evaluation (Table IV)}
+
+\begin{table}[h]
+\centering
+\caption{Iteration 5 formal eval: Student vs Teachers (1449 samples)}
+\label{tab:iter5-eval}
+\begin{tabular}{lr}
+\toprule
+\textbf{Depth (vs DA3)} & \\
+\midrule
+RMSE            & \textbf{0.993 m} \\
+MAE             & 0.799 m \\
+AbsRel          & 0.249 \\
+$\delta < 1.25$ & 56.7\% \\
+\midrule
+\textbf{Seg (vs SAM2)} & \\
+\midrule
+mIoU            & \textbf{30.0\%} \\
+floor           & 57.8\% \\
+wall            & \textcolor{regression}{0.0\%} \\
+person          & 0.0\% \\
+furniture       & 42.9\% \\
+glass           & NaN \\
+other           & 49.1\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Depth RMSE (0.993\,m) matches Iteration 2 (1.000\,m) despite using
+\emph{no ground truth} during training. Seg mIoU jumped from 19.2\%
+to 30.0\% ($+10.8$pp) due to full SAM2 coverage.
+
+\textbf{Wall class collapse:} Wall IoU dropped from 25.7\% (Iter 2) to
+0.0\%. The model stopped predicting class 1 (wall) entirely. This is
+likely because SAM2 labels walls differently than the NYU 894$\to$6
+remap used in Iter 2 --- SAM2 may assign wall pixels to ``other'' or
+not detect them as distinct objects.
+
+\textbf{Status:} Evaluation complete. Iter 6 (uncertainty weighting)
+training in progress.
 
 \subsection{Iteration 6: Uncertainty Weighting + Per-Task Checkpoints (Pending)}
 
@@ -685,8 +723,149 @@ trajectory. All three checkpoints can be evaluated independently.
   \item Manifest: 1449 images (same as Iter 5)
 \end{itemize}
 
-\textbf{Status:} Code changes complete. Awaiting Iter 5 evaluation to
-finish, then training.
+\subsubsection{Training Results}
+
+Train loss dropped smoothly from 2.41 to negative values by epoch
+$\sim$115. The negative loss is a known instability in the Kendall
+formulation: as $\log \sigma^2$ grows, the regularisation term
+$\frac{1}{2}\log \sigma^2$ dominates and drives the total negative.
+All useful learning happened before epoch $\sim$100.
+
+Learned weights evolved: $w_d$ (depth) rose from 1.91 to 5.38, $w_s$
+(seg) from 1.91 to 5.37. In the critical window (epochs 20--80), $w_s$
+was 1.4--1.6$\times$ higher than $w_d$, meaning the model automatically
+favoured segmentation --- the opposite of the fixed 1.0/0.5 weights
+used in Iteration 5.
+
+\textbf{Per-task checkpoints captured three different optima:}
+\begin{itemize}[nosep]
+  \item \texttt{best.pt} --- epoch 38 (best combined val loss: 1.0415)
+  \item \texttt{best\_depth.pt} --- epoch 39 (best depth RMSE: 1.14\,m)
+  \item \texttt{best\_seg.pt} --- epoch 152 (best seg mIoU: 38.9\%)
+\end{itemize}
+
+\subsubsection{Formal Evaluation (All Three Checkpoints)}
+
+\begin{table}[h]
+\centering
+\caption{Iteration 6: per-task checkpoint evaluation (1449 samples)}
+\label{tab:iter6-eval}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Metric} & \textbf{best.pt} & \textbf{best\_depth.pt} & \textbf{best\_seg.pt} \\
+                 & \textbf{(ep 38)} & \textbf{(ep 39)} & \textbf{(ep 152)} \\
+\midrule
+Depth RMSE       & 1.128 m & \textcolor{improved}{\textbf{0.998 m}} & 1.833 m \\
+MAE              & 0.965 m & \textcolor{improved}{\textbf{0.780 m}} & 1.713 m \\
+AbsRel           & 0.346   & \textcolor{improved}{\textbf{0.255}}   & 0.572 \\
+$\delta < 1.25$  & 46.4\%  & \textcolor{improved}{\textbf{57.9\%}}  & 13.4\% \\
+\midrule
+Seg mIoU         & 30.3\%  & 24.1\%  & \textcolor{improved}{\textbf{46.5\%}} \\
+\quad floor      & 57.4\%  & 39.5\%  & \textcolor{improved}{\textbf{63.5\%}} \\
+\quad wall       & 2.2\%   & 1.3\%   & \textcolor{improved}{\textbf{16.6\%}} \\
+\quad person     & 0.0\%   & 0.0\%   & \textcolor{improved}{\textbf{40.8\%}} \\
+\quad furniture  & 44.6\%  & 40.8\%  & \textcolor{improved}{\textbf{61.2\%}} \\
+\quad glass      & NaN     & NaN     & NaN \\
+\quad other      & 47.4\%  & 39.0\%  & \textcolor{improved}{\textbf{50.4\%}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Analysis}
+
+\textbf{Per-task checkpointing is the key result.} The depth-optimal and
+seg-optimal models come from epochs 39 and 152 --- 113 epochs apart.
+No single checkpoint can be best at both tasks simultaneously.
+
+\textbf{Depth (best\_depth.pt):} RMSE 0.998\,m matches Iter 5 (0.993\,m)
+and slightly improves MAE (0.780 vs 0.799) and $\delta < 1.25$
+(57.9\% vs 56.7\%). Uncertainty weighting did not meaningfully change
+depth quality.
+
+\textbf{Segmentation (best\_seg.pt):} mIoU 46.5\% is a major leap from
+Iter 5 (30.0\%, $+16.5$pp). Three classes improved dramatically:
+\begin{itemize}[nosep]
+  \item \textbf{Person:} 0.0\% $\to$ 40.8\% --- first time this class
+    is predicted at all. The extended training (epoch 152) allowed the
+    model to learn the rarer person class.
+  \item \textbf{Wall:} 0.0\% $\to$ 16.6\% --- partially recovered from
+    the Iter 5 collapse.
+  \item \textbf{Furniture:} 42.9\% $\to$ 61.2\% --- substantial gain.
+\end{itemize}
+
+\textbf{Trade-off:} \texttt{best\_seg.pt} has poor depth (1.83\,m RMSE).
+For deployment, two options: (a) use \texttt{best\_depth.pt} and accept
+lower seg, (b) use \texttt{best\_seg.pt} for seg-only applications.
+A two-headed model with separate early stopping per task remains
+future work.
+
+\textbf{Status:} Evaluation complete.
+
+\subsection{Iteration 7: TUM RGB-D Training (Pending)}
+
+Addresses the small-dataset bottleneck by switching to TUM RGB-D, which
+provides $\sim$3$\times$ more frames than NYU Depth V2.
+
+\subsubsection{Dataset}
+
+Three sequences downloaded from TUM RGB-D:
+\begin{itemize}[nosep]
+  \item \texttt{freiburg1\_room} --- 1362 frames (office/living room loop)
+  \item \texttt{freiburg1\_desk} --- 595 frames (cluttered desk, close range)
+  \item \texttt{freiburg2\_large\_no\_loop} --- 2586 frames (large office traverse)
+\end{itemize}
+
+After subsampling every 3rd frame (to reduce temporal redundancy from
+30\,fps video): $\sim$1500 frames. With 80/20 split: $\sim$1200 train /
+$\sim$300 val.
+
+TUM provides Kinect depth (16-bit PNG, factor 5000), which serves as GT
+depth for evaluation. No semantic labels exist --- segmentation is
+purely from YOLO+SAM2 teacher inference.
+
+Camera intrinsics: fr1 $f_x=517.3$, $f_y=516.5$; fr2 $f_x=520.9$,
+$f_y=521.0$. Averaged for DA3: $f_x=519.1$, $f_y=518.75$.
+
+\subsubsection{Pipeline Changes}
+
+\begin{itemize}[nosep]
+  \item \texttt{teacher\_infer/prep\_tum.py} (NEW): Extracts TUM sequences
+    into the flat layout expected by the pipeline (sequential stems,
+    float32 depth in metres, train/val split).
+  \item \texttt{dataset/tum\_loader.py} (NEW): TUM data loader matching
+    the same dict interface as NYU/corridor loaders.
+  \item \texttt{train.py}: Added \texttt{-{}-dataset} flag
+    (\texttt{nyu} | \texttt{tum} | \texttt{corridor}).
+  \item \texttt{teacher\_infer/teacher\_infer\_tum.slurm} (NEW): SLURM
+    script for TUM teacher inference (DA3 + YOLO + SAM2).
+  \item \texttt{train\_iter7.slurm} (NEW): SLURM script for Iter 7
+    training with \texttt{-{}-dataset tum} and uncertainty weighting.
+\end{itemize}
+
+\subsubsection{Training Configuration}
+
+\begin{itemize}[nosep]
+  \item Dataset: TUM RGB-D (3 sequences, subsampled 1/3)
+  \item LR: $3 \times 10^{-4}$, Epochs: 200
+  \item Uncertainty weighting: enabled
+  \item Per-task checkpoints: enabled
+\end{itemize}
+
+\subsubsection{Execution Plan}
+
+\begin{enumerate}[nosep]
+  \item Run \texttt{sbatch teacher\_infer/teacher\_infer\_tum.slurm}
+    (extracts TUM, runs DA3 + YOLO + SAM2, builds manifest)
+  \item Run \texttt{sbatch train\_iter7.slurm}
+    (trains student on TUM teacher labels)
+  \item Evaluate on TUM: \texttt{python eval\_distillation.py
+    -{}-checkpoint best\_depth.pt -{}-manifest tum\_manifest.jsonl}
+  \item Cross-evaluate on NYU: \texttt{python eval\_distillation.py
+    -{}-checkpoint best\_depth.pt -{}-manifest nyu\_manifest.jsonl}
+    (demonstrates dataset-agnosticism)
+\end{enumerate}
+
+\textbf{Status:} Code complete. Awaiting execution.
 
 % ============================================================================
 \section{Comparison: v1 vs v3}
@@ -717,16 +896,16 @@ Conversion formula & None                   & $f \cdot d_{\text{raw}} / 300$ \\
 \label{tab:eval-compare}
 \begin{tabular}{lrrrrr}
 \toprule
-\textbf{Metric} & \textbf{v1 (DA2)} & \textbf{v3 Iter 1} & \textbf{v3 Iter 2} & \textbf{v3 Iter 3} & \textbf{v3 Iter 5} \\
+\textbf{Metric} & \textbf{v3 Iter 2} & \textbf{v3 Iter 5} & \textbf{Iter 6 best} & \textbf{Iter 6 depth} & \textbf{Iter 6 seg} \\
 \midrule
-Depth RMSE     & \textcolor{regression}{75.37 m} & 1.047 m & \textcolor{improved}{\textbf{1.000 m}} & 1.130 m & 1.325 m$^\dagger$ \\
-MAE            & ---      & 0.828 m & \textcolor{improved}{\textbf{0.783 m}} & 0.897 m & (eval pending) \\
-AbsRel         & 1.29     & 0.265   & \textcolor{improved}{\textbf{0.238}}   & 0.287   & (eval pending) \\
-$\delta<1.25$  & 1.0\%    & 54.3\%  & \textcolor{improved}{\textbf{57.1\%}}  & 50.3\%  & (eval pending) \\
-Seg mIoU       & 21.2\%   & 16.4\%  & 19.2\%  & 18.3\%  & \textcolor{improved}{\textbf{29.5\%}}$^\dagger$ \\
+Depth RMSE     & 1.000 m & \textcolor{improved}{\textbf{0.993 m}} & 1.128 m & 0.998 m & 1.833 m \\
+MAE            & \textcolor{improved}{\textbf{0.783 m}} & 0.799 m & 0.965 m & \textcolor{improved}{\textbf{0.780 m}} & 1.713 m \\
+AbsRel         & \textcolor{improved}{\textbf{0.238}}   & 0.249   & 0.346   & 0.255   & 0.572 \\
+$\delta<1.25$  & 57.1\%  & 56.7\%  & 46.4\%  & \textcolor{improved}{\textbf{57.9\%}}  & 13.4\% \\
+Seg mIoU       & 19.2\%  & 30.0\%  & 30.3\%  & 24.1\%  & \textcolor{improved}{\textbf{46.5\%}} \\
 \bottomrule
-\multicolumn{6}{l}{\footnotesize $^\dagger$Training metrics at best checkpoint (epoch 42). Formal eval pending.} \\
-\multicolumn{6}{l}{\footnotesize Iter 2 RMSE used GT depth on $\sim$80\% of samples; Iter 5 is first pure distillation.}
+\multicolumn{6}{l}{\footnotesize Iter 2 used GT depth on $\sim$80\% of samples. Iters 5--6 are pure distillation.} \\
+\multicolumn{6}{l}{\footnotesize Iter 6 depth/seg columns use per-task best checkpoints (epochs 39/152).}
 \end{tabular}
 \end{table}
 
@@ -768,37 +947,84 @@ Exit code 1 aborts the SLURM job, preventing wasted GPU hours on
 malformed teacher output.
 
 % ============================================================================
+\section{Future Work}
+\label{sec:future}
+% ============================================================================
+
+The following directions would directly improve results but are beyond
+the scope of Iterations 1--6.
+
+\subsection{Larger Training Data}
+
+NYU Depth V2 provides only 1159 training images --- too small for robust
+multi-task distillation. The pipeline is dataset-agnostic: only teacher
+inference (DA3 + YOLO + SAM2) needs to run on new data.
+
+\begin{itemize}[nosep]
+  \item \textbf{TUM RGB-D} (10--15k frames): Indoor sequences with
+    ground-truth depth from Kinect. Freely downloadable.
+  \item \textbf{DIODE} (25k frames): Indoor + outdoor, structured-light
+    depth. Large and diverse.
+  \item \textbf{Hypersim} (77k frames): Photorealistic synthetic indoor
+    scenes. No domain gap issues with teacher models.
+\end{itemize}
+
+Strategy: train on a larger dataset, keep NYU as a held-out evaluation
+benchmark. This demonstrates dataset-agnosticism and eliminates the
+small-dataset bottleneck.
+
+\subsection{Larger Student Backbone}
+
+EfficientViT-B1 (5.3M params) was chosen for edge deployment. If latency
+budget allows, scaling to B2 (15.4M params) or B3 (39.2M params) would
+increase capacity. Given the 4$\times$ RMSE gap between teacher (DA3,
+$\sim$0.25\,m) and student (0.993\,m), a larger backbone may close this
+substantially.
+
+\subsection{Loss Formulation Improvements}
+
+\begin{itemize}[nosep]
+  \item \textbf{Clamp $\log \sigma^2$:} Restrict to $[-4, 4]$ to prevent
+    the negative-loss loophole in Kendall uncertainty weighting.
+  \item \textbf{GradNorm} (Chen et al.\ 2018): Dynamically balance task
+    gradients by their relative training rates, avoiding the variance
+    blow-up issue.
+  \item \textbf{Two-phase training:} Train jointly for 50 epochs
+    (captures depth), then freeze the depth decoder and continue
+    training segmentation only. Avoids depth overfitting in later epochs.
+\end{itemize}
+
+\subsection{TensorRT Deployment Benchmark}
+
+Export the student model to ONNX $\to$ TensorRT and benchmark on Jetson
+Orin Nano. This is architecture-dependent (not training-dependent) and
+can proceed with the current checkpoints.
+
+% ============================================================================
 \section{Known Issues and Next Steps}
 \label{sec:next}
 % ============================================================================
 
 \begin{enumerate}
-  \item \textbf{Multi-task divergence (critical):} Depth peaks at epoch
-    $\sim$15--42, then overfits. Seg keeps improving until epoch
-    $\sim$160. A single combined val loss cannot capture both optima.
-    Solutions under consideration:
-    \begin{itemize}[nosep]
-      \item \textbf{Two-phase training:} Joint training for 50 epochs
-        (captures depth), then freeze depth decoder and train seg-only.
-      \item \textbf{Per-task checkpointing:} Save \texttt{best\_depth.pt}
-        and \texttt{best\_seg.pt} separately based on per-metric criteria.
-      \item \textbf{Uncertainty weighting} (Kendall et al.\ 2018):
-        Learnable per-task log-variance scales losses automatically.
-    \end{itemize}
+  \item \textbf{Multi-task divergence (partially solved):} Per-task
+    checkpointing (Iter 6) captures both optima: depth at epoch 39,
+    seg at epoch 152. Uncertainty weighting helped seg significantly
+    (46.5\% vs 30.0\%) but did not improve depth. A unified model that
+    is optimal at both tasks simultaneously remains unsolved; two-phase
+    training (freeze depth decoder after convergence) is future work.
 
-  \item \textbf{Depth RMSE regression:} Iter 5 depth (1.33\,m at best
-    checkpoint) is worse than Iter 2 (1.00\,m). However, Iter 2 used
-    NYU GT depth on $\sim$80\% of samples --- not true distillation.
-    The 1.33\,m is the honest baseline for pure DA3 distillation.
+  \item \textbf{Negative train loss (Iter 6):} The Kendall uncertainty
+    formulation allows loss to go negative when log-variance grows
+    unbounded. Training after epoch $\sim$115 is not meaningful. Clamping
+    $\log \sigma^2$ or using a different weighting scheme may help.
 
-  \item \textbf{Small validation set:} 290 val samples causes high
-    variance in val metrics (RMSE swings from 1.2\,m to 3.8\,m between
-    consecutive epochs). Cross-dataset evaluation (TUM, DIODE, or
-    corridor data) would provide a more robust signal.
+  \item \textbf{Small training set:} 1159 training samples limits
+    generalisation. Cross-dataset training on TUM RGB-D or DIODE
+    (10--25k frames) would likely improve both tasks.
 
-  \item \textbf{Rare classes:} Person (0.0\%) and glass (NaN) are never
-    correctly predicted. NYU has very few glass/person pixels in the
-    6-class remap. Corridor data will have more glass (glass doors).
+  \item \textbf{Person class:} Iter 6 \texttt{best\_seg.pt} achieves
+    40.8\% person IoU (up from 0.0\% in all prior iterations). Glass
+    remains NaN (too few pixels in NYU).
 
   \item \textbf{Table III (TensorRT):} Export to ONNX + TensorRT and
     benchmark on Jetson. Architecture-dependent, not training-dependent,
@@ -827,16 +1053,21 @@ malformed teacher output.
 \texttt{config.py}             & Rewritten: EfficientViT-B1 backbone, DA3 model ID, NYU intrinsics, da2$\to$da3 field renames \\
 \texttt{models/student.py}     & Rewritten: \texttt{timm} EfficientViT-B1 encoder, decoder channels from \texttt{print\_model\_shapes.py} \\
 \texttt{models/losses.py}      & da2$\to$da3 renames; Iter 5: pure distillation; Iter 6: uncertainty weighting \\
-\texttt{train.py}              & da2$\to$da3 renames, \texttt{-{}-freeze-encoder}; Iter 6: \texttt{-{}-uncertainty-weighting}, per-task checkpoints \\
+\texttt{train.py}              & da2$\to$da3 renames, \texttt{-{}-freeze-encoder}; Iter 6: \texttt{-{}-uncertainty-weighting}, per-task checkpoints; Iter 7: \texttt{-{}-dataset} flag \\
 \texttt{train.slurm}           & Added \texttt{-{}-manifest}, l40s\_public partition, torch\_pr\_742\_general account \\
 \texttt{dataset/nyu\_loader.py}  & da2$\to$da3 renames, manifest path fix; Iter 5: manifest coverage print, GT fallback warning \\
+\texttt{dataset/tum\_loader.py}      & NEW: TUM RGB-D loader with same dict interface as NYU/corridor \\
 \texttt{dataset/corridor\_loader.py} & da2$\to$da3 renames in docstrings and dict keys \\
 \texttt{teacher\_infer/run\_da3.py}  & NEW: DA3-Metric-Large inference with focal conversion and output resize \\
 \texttt{teacher\_infer/run\_da2.py}  & DELETED \\
 \texttt{teacher\_infer/verify\_teacher\_output.py} & NEW: pre-inference validation (shape, dtype, scale, Pearson $r$) \\
+\texttt{teacher\_infer/prep\_tum.py}  & NEW: Extract TUM RGB-D sequences to flat layout (timestamp assoc, depth conversion, split) \\
+\texttt{teacher\_infer/teacher\_infer\_tum.slurm} & NEW: SLURM script for TUM teacher inference (DA3 + YOLO + SAM2) \\
 \texttt{teacher\_infer/run\_sam2.py} & Documentation-only: updated docstrings for 4-step pipeline description \\
 \texttt{teacher\_infer/build\_manifest.py} & da2$\to$da3 field handling \\
 \texttt{teacher\_infer/teacher\_infer.slurm} & DA3 steps, verify script; Iter 5: all 1449 images (not just val) \\
+\texttt{train\_iter6.slurm}     & NEW: separate SLURM script for Iter 6 (\texttt{checkpoints\_iter6/}, \texttt{runs\_iter6/}) \\
+\texttt{train\_iter7.slurm}     & NEW: TUM training with \texttt{-{}-dataset tum}, uncertainty weighting \\
 \texttt{eval\_distillation.py}  & DA3 metrics, fixed checkpoint loading (\texttt{ckpt["model"]}) \\
 \texttt{print\_model\_shapes.py} & Rewritten for EfficientViT-B1 feature inspection \\
 \texttt{setup\_hpc.sh}         & anaconda3/2025.06, DA3 source install, timm, SAM2 checkpoint download \\
@@ -875,8 +1106,10 @@ Feb 28, 2026 & Iter 4: pure distillation, LR $3 \times 10^{-4}$, 200 epochs (ove
 Feb 28, 2026 & Root cause found: teacher inference only covered 290/1449 images \\
 Feb 28, 2026 & Iter 5: full-dataset teachers (all 1449), pure distillation \\
 Feb 28, 2026 & Iter 5 training complete (200 epochs): depth/seg divergence observed \\
-Feb 28, 2026 & Best checkpoint epoch 42: RMSE 1.33m, mIoU 29.5\% (eval running) \\
-Feb 28, 2026 & Iter 6: uncertainty weighting + per-task checkpoints (code ready) \\
+Feb 28, 2026 & Iter 5 eval: RMSE 0.993m, mIoU 30.0\% (first pure distillation) \\
+Feb 28, 2026 & Iter 6: uncertainty weighting + per-task checkpoints \\
+Feb 28, 2026 & Iter 6 eval: depth RMSE 0.998m (best\_depth), seg mIoU 46.5\% (best\_seg) \\
+Feb 28, 2026 & Iter 7: TUM RGB-D integration (prep script, loader, teacher SLURM, train SLURM) \\
 \bottomrule
 \end{longtable}
 
