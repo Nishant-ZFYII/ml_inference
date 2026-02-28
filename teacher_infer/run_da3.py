@@ -42,11 +42,25 @@ def load_da3_model(model_id: str, device: torch.device):
 
 
 def infer_single(model, img_path: str, focal: float) -> np.ndarray:
-    """Run DA3 inference on a single image, return metric depth in metres."""
+    """Run DA3 inference on a single image, return metric depth in metres.
+
+    DA3 processes at its own internal resolution (e.g. 378x504).
+    Output is resized to match the original RGB dimensions so depth maps
+    align pixel-for-pixel with the source images.
+    """
+    rgb = Image.open(img_path).convert("RGB")
+    orig_w, orig_h = rgb.size  # PIL gives (W, H)
+
     prediction = model.inference([img_path])
     raw_depth = prediction.depth[0]  # [H, W] float32
 
     metric_depth = focal * raw_depth / 300.0
+
+    if metric_depth.shape != (orig_h, orig_w):
+        depth_pil = Image.fromarray(metric_depth)
+        depth_pil = depth_pil.resize((orig_w, orig_h), Image.BILINEAR)
+        metric_depth = np.array(depth_pil, dtype=np.float32)
+
     return metric_depth.astype(np.float32)
 
 
