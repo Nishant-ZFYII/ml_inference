@@ -12,10 +12,11 @@
 #SBATCH --error=%x-%j.err
 
 # ============================================================================
-# Student Model Training on NYU Torch HPC
+# EfficientViT-B1 Student Model Training on NYU Torch HPC
 #
+# Trains multi-task student (depth + seg) distilled from DA3-Metric-Large
+# and YOLO+SAM2 teachers.
 # Using L40S public partition (48GB VRAM, sufficient for student training).
-# Request tandon_advanced allocation at projects.hpc.nyu.edu for H100/H200 access.
 # ============================================================================
 
 set -euo pipefail

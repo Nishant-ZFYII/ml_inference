@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-Evaluate student model against teacher predictions (Table IV).
+Evaluate student model against DA3-Metric-Large depth and YOLO+SAM2
+segmentation teacher labels (Table IV in the paper).
 
-Compares student outputs to DA2 depth and YOLO+SAM2 segmentation labels
-from the teacher inference pipeline.
+Computes:
+  Depth:  RMSE, MAE, AbsRel, delta < 1.25
+  Seg:    mIoU, per-class IoU
 
 Usage:
     python eval_distillation.py \
-        --checkpoint checkpoints/best.pt \
-        --manifest path/to/manifest.jsonl \
-        --data-root ./data
+        --checkpoint best.pt \
+        --manifest  $SCRATCH/nyu_teacher_data/manifest.jsonl
 """
 
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -27,75 +27,69 @@ from config import Config
 from models.student import build_student
 
 
-def compute_depth_metrics(pred: np.ndarray, target: np.ndarray):
-    """
-    Compute depth evaluation metrics.
-
-    Returns dict with: rmse, abs_rel, delta_1.25
-    """
-    valid = (target > 0) & (pred > 0)
-    if valid.sum() == 0:
-        return {"rmse": 0, "abs_rel": 0, "delta_125": 0}
-
-    p, t = pred[valid], target[valid]
-    rmse = float(np.sqrt(((p - t) ** 2).mean()))
-    abs_rel = float((np.abs(p - t) / t).mean())
-
-    ratio = np.maximum(p / t, t / p)
-    delta_125 = float((ratio < 1.25).mean())
-
-    return {"rmse": rmse, "abs_rel": abs_rel, "delta_125": delta_125}
+def load_model(checkpoint_path: str, device: torch.device, cfg: Config):
+    model = build_student(num_classes=cfg.NUM_CLASSES, pretrained=False)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if "model_state_dict" in ckpt:
+        model.load_state_dict(ckpt["model_state_dict"])
+    else:
+        model.load_state_dict(ckpt)
+    model.to(device)
+    model.eval()
+    return model
 
 
-def compute_seg_metrics(pred: np.ndarray, target: np.ndarray,
-                        num_classes: int = 6):
-    """
-    Compute segmentation mIoU and per-class IoU.
+def resize_np(arr, h, w, order=1):
+    if arr.shape[0] == h and arr.shape[1] == w:
+        return arr
+    mode = Image.NEAREST if order == 0 else Image.BILINEAR
+    return np.array(Image.fromarray(arr).resize((w, h), mode), dtype=arr.dtype)
 
-    Returns dict with: miou, per_class_iou (list)
-    """
-    per_class = []
+
+def compute_depth_metrics(pred, gt, mask):
+    """Compute depth metrics on valid pixels."""
+    p, g = pred[mask], gt[mask]
+    if len(p) == 0:
+        return {}
+
+    rmse = np.sqrt(np.mean((p - g) ** 2))
+    mae = np.mean(np.abs(p - g))
+    abs_rel = np.mean(np.abs(p - g) / (g + 1e-8))
+
+    ratio = np.maximum(p / (g + 1e-8), g / (p + 1e-8))
+    delta_125 = np.mean(ratio < 1.25) * 100.0
+
+    return {
+        "rmse": rmse,
+        "mae": mae,
+        "abs_rel": abs_rel,
+        "delta_125": delta_125,
+    }
+
+
+def compute_seg_metrics(pred, gt, num_classes):
+    """Compute per-class IoU and mIoU."""
+    ious = {}
     for c in range(num_classes):
         pred_c = pred == c
-        target_c = target == c
-        intersection = (pred_c & target_c).sum()
-        union = (pred_c | target_c).sum()
+        gt_c = gt == c
+        intersection = (pred_c & gt_c).sum()
+        union = (pred_c | gt_c).sum()
         if union > 0:
-            per_class.append(float(intersection / union))
-        else:
-            per_class.append(float("nan"))
-
-    valid_ious = [x for x in per_class if not np.isnan(x)]
-    miou = float(np.mean(valid_ious)) if valid_ious else 0.0
-
-    return {"miou": miou, "per_class_iou": per_class}
+            ious[c] = intersection / union
+    miou = np.mean(list(ious.values())) if ious else 0.0
+    return miou, ious
 
 
 def main():
-    p = argparse.ArgumentParser(description="Evaluate student vs teachers")
-    p.add_argument("--checkpoint", type=str, default="checkpoints/best.pt")
-    p.add_argument("--manifest", type=str, required=True,
-                   help="Path to manifest.jsonl from teacher inference")
-    p.add_argument("--data-root", type=str, default="./data")
-    p.add_argument("--device", type=str, default=None)
-    p.add_argument("--limit", type=int, default=0,
-                   help="Limit number of samples (0 = all)")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(description="Evaluate student vs teacher")
+    parser.add_argument("--checkpoint", type=str, required=True)
+    parser.add_argument("--manifest", type=str, required=True)
+    parser.add_argument("--device", type=str, default=None)
+    args = parser.parse_args()
 
     cfg = Config()
 
-    if not os.path.exists(args.manifest):
-        print(f"ERROR: Manifest not found: {args.manifest}")
-        print("\nTo generate teacher predictions, run:")
-        print("  sbatch teacher_infer/teacher_infer.slurm")
-        print("Then run this script with --manifest pointing to the output.")
-        sys.exit(1)
-
-    if not os.path.exists(args.checkpoint):
-        print(f"ERROR: Checkpoint not found: {args.checkpoint}")
-        sys.exit(1)
-
-    # Device
     if args.device:
         device = torch.device(args.device)
     elif torch.cuda.is_available():
@@ -103,107 +97,100 @@ def main():
     else:
         device = torch.device("cpu")
 
-    # Load model
     print(f"Loading checkpoint: {args.checkpoint}")
-    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    model = build_student(num_classes=cfg.NUM_CLASSES, pretrained=False)
-    model.load_state_dict(ckpt["model"])
-    model = model.to(device)
-    model.eval()
+    model = load_model(args.checkpoint, device, cfg)
 
-    # Load manifest
-    samples = []
+    manifest_dir = Path(args.manifest).parent
     with open(args.manifest) as f:
-        for line in f:
-            samples.append(json.loads(line))
-
-    if args.limit > 0:
-        samples = samples[:args.limit]
+        samples = [json.loads(line) for line in f]
 
     print(f"Evaluating {len(samples)} samples...")
-    base_dir = Path(os.path.dirname(args.manifest))
 
-    all_depth_metrics = []
-    all_seg_metrics = []
+    all_depth = {"rmse": [], "mae": [], "abs_rel": [], "delta_125": []}
+    all_seg_pred = []
+    all_seg_gt = []
 
-    for sample in tqdm(samples, desc="Evaluating"):
-        rgb_path = base_dir / sample["rgb"]
-        if not rgb_path.exists():
-            continue
+    for entry in tqdm(samples, desc="Evaluating"):
+        rgb_path = manifest_dir / entry["rgb"]
+        rgb = Image.open(rgb_path).convert("RGB")
+        rgb = rgb.resize((cfg.INPUT_WIDTH, cfg.INPUT_HEIGHT), Image.BILINEAR)
+        rgb_np = np.array(rgb, dtype=np.float32) / 255.0
+        rgb_t = torch.from_numpy(rgb_np.transpose(2, 0, 1)).unsqueeze(0).to(device)
 
-        # Load and preprocess RGB
-        img = Image.open(rgb_path).convert("RGB")
-        img = img.resize((cfg.INPUT_WIDTH, cfg.INPUT_HEIGHT))
-        rgb_np = np.array(img, dtype=np.float32).transpose(2, 0, 1) / 255.0
-        rgb_t = torch.from_numpy(rgb_np).unsqueeze(0).to(device)
-
-        # Run student inference
         with torch.no_grad():
             pred_depth, pred_seg = model(rgb_t)
 
-        pred_depth_np = pred_depth.squeeze().cpu().numpy()
-        pred_seg_np = pred_seg.argmax(dim=1).squeeze().cpu().numpy()
+        pred_d = pred_depth.squeeze().cpu().numpy()
+        pred_s = pred_seg.argmax(dim=1).squeeze().cpu().numpy()
 
-        # Compare to DA2 teacher depth
-        da2_path = sample.get("da2_depth")
-        if da2_path:
-            da2_full = base_dir / da2_path
-            if da2_full.exists():
-                da2_depth = np.load(da2_full).astype(np.float32)
-                da2_resized = np.array(
-                    Image.fromarray(da2_depth).resize(
-                        (cfg.INPUT_WIDTH, cfg.INPUT_HEIGHT)),
-                    dtype=np.float32)
-                metrics = compute_depth_metrics(pred_depth_np, da2_resized)
-                all_depth_metrics.append(metrics)
+        # Depth: compare vs DA3 teacher
+        da3_path = entry.get("da3_depth")
+        if da3_path:
+            da3_full = manifest_dir / da3_path
+            if da3_full.exists():
+                da3_depth = np.load(da3_full).astype(np.float32)
+                da3_depth = resize_np(da3_depth, cfg.INPUT_HEIGHT, cfg.INPUT_WIDTH)
+                mask = da3_depth > 0
+                metrics = compute_depth_metrics(pred_d, da3_depth, mask)
+                for k in all_depth:
+                    if k in metrics:
+                        all_depth[k].append(metrics[k])
 
-        # Compare to SAM2 teacher segmentation
-        sam2_path = sample.get("sam2_seg")
-        if sam2_path:
-            sam2_full = base_dir / sam2_path
-            if sam2_full.exists():
-                sam2_seg = np.load(sam2_full).astype(np.int64)
-                sam2_resized = np.array(
-                    Image.fromarray(sam2_seg.astype(np.uint8)).resize(
-                        (cfg.INPUT_WIDTH, cfg.INPUT_HEIGHT),
-                        Image.NEAREST),
-                    dtype=np.int64)
-                metrics = compute_seg_metrics(pred_seg_np, sam2_resized,
-                                              cfg.NUM_CLASSES)
-                all_seg_metrics.append(metrics)
+        # Seg: compare vs YOLO+SAM2 teacher
+        seg_path = entry.get("sam2_seg")
+        if seg_path:
+            seg_full = manifest_dir / seg_path
+            if seg_full.exists():
+                teacher_seg = np.load(seg_full).astype(np.int64)
+                teacher_seg = resize_np(
+                    teacher_seg.astype(np.float32),
+                    cfg.INPUT_HEIGHT, cfg.INPUT_WIDTH, order=0
+                ).astype(np.int64)
+                valid = teacher_seg < cfg.NUM_CLASSES
+                if valid.any():
+                    all_seg_pred.append(pred_s[valid])
+                    all_seg_gt.append(teacher_seg[valid])
 
-    # ── Print Table IV ─────────────────────────────────────────────────
-    print(f"\n{'='*55}")
+    # Aggregate depth metrics
+    print()
+    print("=" * 60)
     print("Table IV: Student vs Teacher Distillation Quality")
-    print(f"{'='*55}")
+    print("=" * 60)
 
-    if all_depth_metrics:
-        avg_rmse = np.mean([m["rmse"] for m in all_depth_metrics])
-        avg_absrel = np.mean([m["abs_rel"] for m in all_depth_metrics])
-        avg_delta = np.mean([m["delta_125"] for m in all_depth_metrics])
-        print(f"\nDepth (Student vs DA2-Large):")
-        print(f"  RMSE:           {avg_rmse:.4f} m")
-        print(f"  AbsRel:         {avg_absrel:.4f}")
-        print(f"  delta < 1.25:   {avg_delta*100:.1f}%")
-    else:
-        print("\nDepth: No DA2 teacher predictions available.")
+    print(f"\nDepth (Student vs DA3-Metric-Large):")
+    for k in ["rmse", "mae", "abs_rel", "delta_125"]:
+        vals = all_depth[k]
+        if vals:
+            mean_val = np.mean(vals)
+            label = {
+                "rmse": "RMSE",
+                "mae": "MAE",
+                "abs_rel": "AbsRel",
+                "delta_125": "delta < 1.25",
+            }[k]
+            unit = "%" if k == "delta_125" else "m"
+            if k == "abs_rel":
+                unit = ""
+                print(f"  {label:20s}: {mean_val:.4f}")
+            else:
+                print(f"  {label:20s}: {mean_val:.4f} {unit}")
 
-    if all_seg_metrics:
-        avg_miou = np.mean([m["miou"] for m in all_seg_metrics])
+    # Aggregate seg metrics
+    if all_seg_pred:
+        combined_pred = np.concatenate(all_seg_pred)
+        combined_gt = np.concatenate(all_seg_gt)
+        miou, per_class = compute_seg_metrics(
+            combined_pred, combined_gt, cfg.NUM_CLASSES
+        )
         print(f"\nSegmentation (Student vs YOLO+SAM2):")
-        print(f"  mIoU:           {avg_miou*100:.1f}%")
+        print(f"  {'mIoU':20s}: {miou*100:.1f}%")
+        print(f"\n  Per-class IoU:")
+        for c in range(cfg.NUM_CLASSES):
+            name = cfg.CLASS_NAMES[c] if c < len(cfg.CLASS_NAMES) else f"class_{c}"
+            iou = per_class.get(c, float("nan"))
+            print(f"    {name:15s}: {iou*100:.1f}%")
 
-        avg_per_class = np.nanmean(
-            [m["per_class_iou"] for m in all_seg_metrics], axis=0)
-        class_names = cfg.CLASS_NAMES
-        print(f"  Per-class IoU:")
-        for i, (name, iou) in enumerate(zip(class_names, avg_per_class)):
-            if not np.isnan(iou):
-                print(f"    {name:12s}: {iou*100:.1f}%")
-    else:
-        print("\nSegmentation: No SAM2 teacher predictions available.")
-
-    print(f"\n{'='*55}")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

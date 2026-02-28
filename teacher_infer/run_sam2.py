@@ -2,19 +2,43 @@
 """
 YOLO-seeded SAM2 semantic labeling pipeline.
 
-SAM2 produces instance masks (no class labels). This pipeline:
-  1. YOLO detects objects with class labels (person, furniture items)
-  2. SAM2 refines each YOLO box to a pixel-accurate mask
-  3. Geometric heuristics label floor/wall/glass from the depth map
-  4. All masks merge into a single 6-class label map
+Produces a merged 6-class semantic segmentation label map per image by
+combining three complementary strategies:
 
-Output: per-image .npy segmentation label (uint8, HxW, values 0-5).
+  Step 1 -- YOLOv8 object detection:
+      Runs YOLOv8 on each RGB image to get bounding boxes with class
+      labels (person, chair, table, sofa, etc).  YOLO provides the
+      class semantics that SAM2 lacks.
+
+  Step 2 -- SAM2-Large mask refinement:
+      Each YOLO bounding box is passed to SAM2 as a box prompt.
+      SAM2 refines the coarse box into a pixel-accurate instance mask,
+      giving much cleaner boundaries than YOLO alone.
+
+  Step 3 -- Geometric heuristics for floor/wall/glass:
+      Uses the depth map to label pixels that belong to structural
+      classes which YOLO cannot detect (floor, walls, glass/mirrors).
+      Floor: lowest depth-gradient region at image bottom.
+      Wall:  large planar surfaces from depth normals.
+      Glass: high-reflectivity / missing-depth regions near walls.
+
+  Step 4 -- Mask merging:
+      YOLO+SAM2 instance masks (which have reliable class labels)
+      override geometric labels wherever they overlap.  The final
+      output is a single HxW uint8 array with values 0-5.
+
+Output per image: {stem}_sam2_seg.npy  (uint8, HxW, values 0-5)
+  0=floor, 1=wall, 2=person, 3=furniture, 4=glass, 5=other
+
+The file name says "sam2_seg" but the content is the FINAL merged map
+from all four steps above, not raw SAM2 output.
 
 Usage:
     python -m teacher_infer.run_sam2 \
-        --input-dir $SCRATCH/nyu_teacher_input/rgb/ \
-        --depth-dir $SCRATCH/nyu_teacher_input/depth/ \
-        --output-dir $SCRATCH/nyu_teacher_output/sam2_seg/
+        --input-dir $SCRATCH/nyu_teacher_data/rgb/ \
+        --depth-dir $SCRATCH/nyu_teacher_data/depth/ \
+        --output-dir $SCRATCH/nyu_teacher_data/sam2_seg/ \
+        --sam2-checkpoint $SCRATCH/model_weights/sam2_hiera_large.pt
 """
 
 import argparse

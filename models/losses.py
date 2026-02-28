@@ -5,7 +5,7 @@ Key design: the hybrid depth supervision target mirrors the runtime
 fusion equation in depth_fusion.py.
 
     Runtime:  d_fused = ToF  if confidence >= tau  else  d_student
-    Training: target  = ToF  if confidence >= tau  else  DA2
+    Training: target  = ToF  if confidence >= tau  else  DA3
 
 This means a reviewer sees the training loss and runtime fusion and
 recognises they encode the same prior.
@@ -28,7 +28,7 @@ class HybridDepthLoss(nn.Module):
     L1 depth loss with hybrid supervision target.
 
     Where ToF confidence >= tau  →  supervise to ToF (real metric depth)
-    Where ToF confidence <  tau  →  supervise to DA2 (neural depth)
+    Where ToF confidence <  tau  →  supervise to DA3 (neural depth)
 
     For NYU stand-in: confidence is synthesised from depth validity
     (1.0 where GT depth > 0, 0.0 where GT depth == 0).
@@ -43,12 +43,12 @@ class HybridDepthLoss(nn.Module):
         pred_depth: torch.Tensor,    # [B, 1, H, W]
         tof_depth: torch.Tensor,     # [B, 1, H, W]  ground-truth / ToF
         confidence: torch.Tensor,    # [B, 1, H, W]  0-1
-        da2_depth: torch.Tensor | None = None,  # [B, 1, H, W]
-        has_da2: bool = False,
+        da3_depth: torch.Tensor | None = None,  # [B, 1, H, W]
+        has_da3: bool = False,
     ) -> torch.Tensor:
 
-        if has_da2 and da2_depth is not None:
-            target = torch.where(confidence >= self.tau, tof_depth, da2_depth)
+        if has_da3 and da3_depth is not None:
+            target = torch.where(confidence >= self.tau, tof_depth, da3_depth)
         else:
             target = tof_depth
 
@@ -119,14 +119,14 @@ class MultiTaskLoss(nn.Module):
         gt_depth: torch.Tensor,     # [B, 1, H, W]
         gt_seg: torch.Tensor,       # [B, H, W] int64
         confidence: torch.Tensor,   # [B, 1, H, W]
-        da2_depth: torch.Tensor | None = None,
-        has_da2: bool = False,
+        da3_depth: torch.Tensor | None = None,
+        has_da3: bool = False,
     ) -> dict:
         """
         Returns dict with 'total', 'depth', 'seg', 'edge' loss values.
         """
         l_depth = self.depth_loss(pred_depth, gt_depth, confidence,
-                                  da2_depth, has_da2)
+                                  da3_depth, has_da3)
         l_seg = self.seg_loss(pred_seg, gt_seg)
         l_edge = self.edge_loss(pred_depth, rgb)
 

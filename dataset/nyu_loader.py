@@ -4,7 +4,7 @@ NYU Depth V2 dataset loader.
 Downloads the labeled split (1449 RGBD pairs) from HuggingFace,
 caches to disk, and provides PyTorch Dataset / DataLoader objects.
 
-When teacher predictions (DA2 depth, YOLO+SAM2 seg) are available via a
+When teacher predictions (DA3 depth, YOLO+SAM2 seg) are available via a
 manifest.jsonl file, those are loaded alongside NYU ground truth so the
 hybrid depth loss can use them.
 """
@@ -39,8 +39,8 @@ class NYUDepthV2Dataset(Dataset):
         depth        : float32 tensor [1, H, W]  in meters
         seg          : int64   tensor [H, W]      class ids {0..5, 255}
         confidence   : float32 tensor [1, H, W]  synthetic confidence
-        da2_depth    : float32 tensor [1, H, W]  (or zeros if unavailable)
-        has_da2      : bool                        whether da2_depth is real
+        da3_depth    : float32 tensor [1, H, W]  (or zeros if unavailable)
+        has_da3      : bool                        whether da3_depth is real
     """
 
     def __init__(
@@ -155,18 +155,18 @@ class NYUDepthV2Dataset(Dataset):
         # Synthesize confidence from depth validity (NYU stand-in for ToF confidence)
         confidence = (depth > 0).astype(np.float32)
 
-        # Load DA2 teacher depth if available
-        has_da2 = False
-        da2_depth = np.zeros_like(depth)
+        # Load DA3 teacher depth if available
+        has_da3 = False
+        da3_depth = np.zeros_like(depth)
         if stem in self._teacher_map:
             entry = self._teacher_map[stem]
-            da2_path = entry.get("da2_depth")
-            if da2_path and os.path.exists(da2_path):
-                da2_depth = np.load(da2_path).astype(np.float32)
-                has_da2 = True
+            da3_path = entry.get("da3_depth")
+            if da3_path and os.path.exists(da3_path):
+                da3_depth = np.load(da3_path).astype(np.float32)
+                has_da3 = True
 
-        rgb, depth, seg, confidence, da2_depth = self._transform(
-            rgb, depth, seg, confidence, da2_depth
+        rgb, depth, seg, confidence, da3_depth = self._transform(
+            rgb, depth, seg, confidence, da3_depth
         )
 
         return {
@@ -174,8 +174,8 @@ class NYUDepthV2Dataset(Dataset):
             "depth": depth,
             "seg": seg,
             "confidence": confidence,
-            "da2_depth": da2_depth,
-            "has_da2": has_da2,
+            "da3_depth": da3_depth,
+            "has_da3": has_da3,
         }
 
     # ── Transforms ─────────────────────────────────────────────────────
@@ -186,28 +186,25 @@ class NYUDepthV2Dataset(Dataset):
         depth: np.ndarray,
         seg: np.ndarray,
         confidence: np.ndarray,
-        da2_depth: np.ndarray,
+        da3_depth: np.ndarray,
     ) -> Tuple[torch.Tensor, ...]:
         """Resize, augment, and convert to tensors."""
         w, h = rgb.size
 
         if self.augment:
-            # Random horizontal flip
             if random.random() > 0.5:
                 rgb = rgb.transpose(Image.FLIP_LEFT_RIGHT)
                 depth = np.fliplr(depth).copy()
                 seg = np.fliplr(seg).copy()
                 confidence = np.fliplr(confidence).copy()
-                da2_depth = np.fliplr(da2_depth).copy()
+                da3_depth = np.fliplr(da3_depth).copy()
 
-            # Color jitter (RGB only)
             from torchvision import transforms as T
             jitter = T.ColorJitter(
                 brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1
             )
             rgb = jitter(rgb)
 
-            # Random crop (if image is larger than target)
             if h > self.height and w > self.width:
                 top = random.randint(0, h - self.height)
                 left = random.randint(0, w - self.width)
@@ -215,20 +212,19 @@ class NYUDepthV2Dataset(Dataset):
                 depth = depth[top:top + self.height, left:left + self.width]
                 seg = seg[top:top + self.height, left:left + self.width]
                 confidence = confidence[top:top + self.height, left:left + self.width]
-                da2_depth = da2_depth[top:top + self.height, left:left + self.width]
+                da3_depth = da3_depth[top:top + self.height, left:left + self.width]
             else:
                 rgb = rgb.resize((self.width, self.height), Image.BILINEAR)
                 depth = _resize_np(depth, self.height, self.width)
                 seg = _resize_np(seg, self.height, self.width, order=0)
                 confidence = _resize_np(confidence, self.height, self.width)
-                da2_depth = _resize_np(da2_depth, self.height, self.width)
+                da3_depth = _resize_np(da3_depth, self.height, self.width)
         else:
-            # Validation: simple resize
             rgb = rgb.resize((self.width, self.height), Image.BILINEAR)
             depth = _resize_np(depth, self.height, self.width)
             seg = _resize_np(seg, self.height, self.width, order=0)
             confidence = _resize_np(confidence, self.height, self.width)
-            da2_depth = _resize_np(da2_depth, self.height, self.width)
+            da3_depth = _resize_np(da3_depth, self.height, self.width)
 
         # To tensors
         rgb_t = torch.from_numpy(
@@ -237,9 +233,9 @@ class NYUDepthV2Dataset(Dataset):
         depth_t = torch.from_numpy(depth[np.newaxis].astype(np.float32))
         seg_t = torch.from_numpy(seg.astype(np.int64))
         conf_t = torch.from_numpy(confidence[np.newaxis].astype(np.float32))
-        da2_t = torch.from_numpy(da2_depth[np.newaxis].astype(np.float32))
+        da3_t = torch.from_numpy(da3_depth[np.newaxis].astype(np.float32))
 
-        return rgb_t, depth_t, seg_t, conf_t, da2_t
+        return rgb_t, depth_t, seg_t, conf_t, da3_t
 
 
 def _resize_np(arr: np.ndarray, h: int, w: int, order: int = 1) -> np.ndarray:

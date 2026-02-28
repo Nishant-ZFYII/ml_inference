@@ -7,26 +7,22 @@
 #SBATCH --account=torch_pr_742_general
 #SBATCH --partition=l40s_public
 #SBATCH --gres=gpu:l40s:1
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
 
 # ============================================================================
-# Teacher Inference: DA2-Large + YOLO+SAM2 on NYU val set
-#
-# Using L40S public partition (48GB VRAM).
-# If OOM with DA2+SAM2+YOLO together, request tandon_advanced for H100/H200.
+# Teacher Inference: DA3-Metric-Large + YOLO+SAM2 on NYU val set
 # ============================================================================
 
 set -euo pipefail
 
-# ── Environment (follows NYU HPC best practices) ──────────────────────────
+# ── Environment ─────────────────────────────────────────────────────────────
 module purge
 module load anaconda3/2025.06
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-# Conda activation per NYU HPC docs (source activate, not conda activate)
 source $(conda info --base)/etc/profile.d/conda.sh
 source activate $SCRATCH/conda_envs/nchsb_ml
 export PATH=$SCRATCH/conda_envs/nchsb_ml/bin:$PATH
@@ -35,13 +31,23 @@ export PYTHONNOUSERSITE=True
 REPO_DIR=$HOME/ml_pipeline
 DATA_DIR=$SCRATCH/nyu_teacher_data
 SAM2_CKPT=$SCRATCH/model_weights/sam2_hiera_large.pt
-
-# Install teacher-specific dependencies (only needed once)
-pip install -q depth-anything-v2 ultralytics segment-anything-2 2>/dev/null || true
+DA3_REPO=$SCRATCH/Depth-Anything-3
 
 cd $REPO_DIR
 
-# ── Step 1: Extract NYU images and depth to flat directories ───────────────
+# ── Step 0: Install DA3 if not already installed ────────────────────────────
+if ! python -c "import depth_anything_3" 2>/dev/null; then
+    echo "=== Installing DA3 ==="
+    if [ ! -d "$DA3_REPO" ]; then
+        git clone https://github.com/ByteDance-Seed/Depth-Anything-3 $DA3_REPO
+    fi
+    pip install -e $DA3_REPO
+fi
+
+# Install other teacher deps
+pip install -q ultralytics 2>/dev/null || true
+
+# ── Step 1: Extract NYU images and depth to flat directories ────────────────
 echo "=== Step 1: Preparing NYU data ==="
 INPUT_RGB=$DATA_DIR/rgb
 INPUT_DEPTH=$DATA_DIR/depth
@@ -67,15 +73,25 @@ for idx in indices:
 print(f'Extracted {len(indices)} val samples')
 "
 
-# ── Step 2: DA2-Large depth predictions ────────────────────────────────────
-echo "=== Step 2: Running DA2-Large ==="
-OUTPUT_DA2=$DATA_DIR/da2_depth
-python -m teacher_infer.run_da2 \
+# ── Step 2: Verify DA3 output on 5 frames (gate) ───────────────────────────
+echo "=== Step 2: Verifying DA3 output ==="
+python -m teacher_infer.verify_teacher_output \
     --input-dir $INPUT_RGB \
-    --output-dir $OUTPUT_DA2
+    --gt-depth-dir $INPUT_DEPTH \
+    --output-dir $SCRATCH/verify_output \
+    --n-frames 5
 
-# ── Step 3: YOLO+SAM2 segmentation labels ─────────────────────────────────
-echo "=== Step 3: Running YOLO+SAM2 ==="
+# If verify exits non-zero, set -e aborts the job here
+
+# ── Step 3: DA3-Metric-Large depth predictions ─────────────────────────────
+echo "=== Step 3: Running DA3-Metric-Large ==="
+OUTPUT_DA3=$DATA_DIR/da3_depth
+python -m teacher_infer.run_da3 \
+    --input-dir $INPUT_RGB \
+    --output-dir $OUTPUT_DA3
+
+# ── Step 4: YOLO+SAM2 segmentation labels ──────────────────────────────────
+echo "=== Step 4: Running YOLO+SAM2 ==="
 OUTPUT_SAM2=$DATA_DIR/sam2_seg
 python -m teacher_infer.run_sam2 \
     --input-dir $INPUT_RGB \
@@ -83,12 +99,12 @@ python -m teacher_infer.run_sam2 \
     --output-dir $OUTPUT_SAM2 \
     --sam2-checkpoint $SAM2_CKPT
 
-# ── Step 4: Build manifest ─────────────────────────────────────────────────
-echo "=== Step 4: Building manifest ==="
+# ── Step 5: Build manifest ─────────────────────────────────────────────────
+echo "=== Step 5: Building manifest ==="
 python -m teacher_infer.build_manifest \
     --rgb-dir $INPUT_RGB \
     --depth-dir $INPUT_DEPTH \
-    --da2-dir $OUTPUT_DA2 \
+    --da3-dir $OUTPUT_DA3 \
     --sam2-dir $OUTPUT_SAM2 \
     --output $DATA_DIR/manifest.jsonl
 

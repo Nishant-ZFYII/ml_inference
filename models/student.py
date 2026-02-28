@@ -1,31 +1,25 @@
 """
-Multi-task student model: MobileNetV3-Small encoder + dual decoder heads.
+Multi-task student model: EfficientViT-B1 encoder + dual decoder heads.
 
 Produces both metric depth and 6-class semantic segmentation from a single
 RGB image.  The encoder is shared; each head has its own decoder with skip
 connections from the encoder feature pyramid.
 
-Verified feature map shapes (input 320x240):
-    Block  0:  16ch, 120x160  (1/2)
-    Block  1:  16ch,  60x80   (1/4)
-    Block  3:  24ch,  30x40   (1/8)
-    Block  4:  40ch,  15x20   (1/16)
-    Block 12: 576ch,   8x10   (bottleneck)
+Verified feature map shapes (input 320x240, via timm features_only=True):
+    Stage 0:  32ch, 60x80   (1/4)   ← skip 0
+    Stage 1:  64ch, 30x40   (1/8)   ← skip 1
+    Stage 2: 128ch, 15x20   (1/16)  ← skip 2
+    Stage 3: 256ch,  8x10   (1/32)  ← bottleneck
 
 Decoder uses 3 transposed-conv upsample stages with skip connections
-at blocks 4, 3, and 1, then a final bilinear 4x upsample to reach
+at stages 2, 1, and 0, then a final bilinear upsample to reach
 full 240x320 resolution.
 """
 
+import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
-
-# Skip connection configuration (verified by print_model_shapes.py)
-SKIP_INDICES = (1, 3, 4)   # block indices in model.features
-SKIP_CHANNELS = (16, 24, 40)  # channels at each skip point
-BOTTLENECK_CHANNELS = 576
 
 
 class DecoderBlock(nn.Module):
@@ -44,7 +38,6 @@ class DecoderBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         x = F.relu(self.bn(self.up(x)), inplace=True)
-        # Handle spatial size mismatch from non-power-of-2 dimensions
         if x.shape[2:] != skip.shape[2:]:
             x = F.interpolate(x, size=skip.shape[2:], mode="bilinear",
                               align_corners=False)
@@ -54,48 +47,54 @@ class DecoderBlock(nn.Module):
 
 class MultiTaskStudent(nn.Module):
     """
-    MobileNetV3-Small encoder with shared backbone and two decoder heads:
+    EfficientViT-B1 encoder with shared backbone and two decoder heads:
         - Depth head: predicts single-channel metric depth (meters)
         - Segmentation head: predicts C-channel logits
 
     Args:
         num_classes: number of segmentation classes (default 6)
         pretrained: use ImageNet-pretrained encoder weights
+        backbone_name: timm model name for the encoder
     """
 
-    def __init__(self, num_classes: int = 6, pretrained: bool = True):
+    def __init__(self, num_classes: int = 6, pretrained: bool = True,
+                 backbone_name: str = "efficientvit_b1.r288_in1k"):
         super().__init__()
         self.num_classes = num_classes
 
         # ── Encoder ────────────────────────────────────────────────────
-        weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
-        backbone = mobilenet_v3_small(weights=weights)
-        self.encoder = backbone.features  # nn.Sequential of 13 blocks (0-12)
+        self.encoder = timm.create_model(
+            backbone_name, pretrained=pretrained, features_only=True
+        )
+        channels = self.encoder.feature_info.channels()  # [32, 64, 128, 256]
+
+        skip_chs = channels[:-1]   # [32, 64, 128]
+        bottleneck_ch = channels[-1]  # 256
 
         # ── Neck: reduce bottleneck channels ───────────────────────────
         neck_ch = 128
         self.neck = nn.Sequential(
-            nn.Conv2d(BOTTLENECK_CHANNELS, neck_ch, 1),
+            nn.Conv2d(bottleneck_ch, neck_ch, 1),
             nn.BatchNorm2d(neck_ch),
             nn.ReLU(inplace=True),
         )
 
         # ── Depth decoder ──────────────────────────────────────────────
-        self.depth_d1 = DecoderBlock(neck_ch, SKIP_CHANNELS[2], 64)   # +block4 skip
-        self.depth_d2 = DecoderBlock(64, SKIP_CHANNELS[1], 32)        # +block3 skip
-        self.depth_d3 = DecoderBlock(32, SKIP_CHANNELS[0], 16)        # +block1 skip
+        self.depth_d1 = DecoderBlock(neck_ch, skip_chs[2], 64)    # +stage2 skip (128ch)
+        self.depth_d2 = DecoderBlock(64, skip_chs[1], 32)         # +stage1 skip (64ch)
+        self.depth_d3 = DecoderBlock(32, skip_chs[0], 16)         # +stage0 skip (32ch)
         self.depth_head = nn.Sequential(
             nn.Conv2d(16, 1, kernel_size=1),
-            nn.ReLU(inplace=True),  # depth is non-negative
+            nn.ReLU(inplace=True),
         )
 
         # ── Segmentation decoder ───────────────────────────────────────
-        self.seg_d1 = DecoderBlock(neck_ch, SKIP_CHANNELS[2], 64)
-        self.seg_d2 = DecoderBlock(64, SKIP_CHANNELS[1], 32)
-        self.seg_d3 = DecoderBlock(32, SKIP_CHANNELS[0], 16)
+        self.seg_d1 = DecoderBlock(neck_ch, skip_chs[2], 64)
+        self.seg_d2 = DecoderBlock(64, skip_chs[1], 32)
+        self.seg_d3 = DecoderBlock(32, skip_chs[0], 16)
         self.seg_head = nn.Conv2d(16, num_classes, kernel_size=1)
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: RGB tensor [B, 3, H, W] normalized to [0, 1]
@@ -104,30 +103,27 @@ class MultiTaskStudent(nn.Module):
             depth: [B, 1, H, W] metric depth in meters
             seg:   [B, C, H, W] segmentation logits
         """
-        input_size = x.shape[2:]  # (H, W)
+        input_size = x.shape[2:]
 
-        # ── Encoder forward with skip extraction ───────────────────────
-        skips = {}
-        for i, block in enumerate(self.encoder):
-            x = block(x)
-            if i in SKIP_INDICES:
-                skips[i] = x
+        # ── Encoder forward ───────────────────────────────────────────
+        features = self.encoder(x)  # list of 4 feature maps
+        skips = features[:-1]       # stages 0, 1, 2
+        bottleneck = features[-1]   # stage 3
 
-        # x is now the bottleneck: [B, 576, H/30, W/32]
-        feat = self.neck(x)
+        feat = self.neck(bottleneck)
 
         # ── Depth decoder ──────────────────────────────────────────────
-        d = self.depth_d1(feat, skips[SKIP_INDICES[2]])  # skip from block 4
-        d = self.depth_d2(d, skips[SKIP_INDICES[1]])     # skip from block 3
-        d = self.depth_d3(d, skips[SKIP_INDICES[0]])     # skip from block 1
+        d = self.depth_d1(feat, skips[2])    # skip from stage 2
+        d = self.depth_d2(d, skips[1])       # skip from stage 1
+        d = self.depth_d3(d, skips[0])       # skip from stage 0
         d = F.interpolate(d, size=input_size, mode="bilinear",
                           align_corners=False)
         depth = self.depth_head(d)
 
         # ── Segmentation decoder ───────────────────────────────────────
-        s = self.seg_d1(feat, skips[SKIP_INDICES[2]])
-        s = self.seg_d2(s, skips[SKIP_INDICES[1]])
-        s = self.seg_d3(s, skips[SKIP_INDICES[0]])
+        s = self.seg_d1(feat, skips[2])
+        s = self.seg_d2(s, skips[1])
+        s = self.seg_d3(s, skips[0])
         s = F.interpolate(s, size=input_size, mode="bilinear",
                           align_corners=False)
         seg = self.seg_head(s)

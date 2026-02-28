@@ -99,11 +99,10 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler=None):
         gt_depth = batch["depth"].to(device)
         gt_seg = batch["seg"].to(device)
         confidence = batch["confidence"].to(device)
-        da2_depth = batch["da2_depth"].to(device)
-        has_da2 = batch["has_da2"]
-        # has_da2 is per-sample; use any() for the batch
-        batch_has_da2 = any(h.item() if isinstance(h, torch.Tensor) else h
-                           for h in has_da2) if hasattr(has_da2, '__iter__') else bool(has_da2)
+        da3_depth = batch["da3_depth"].to(device)
+        has_da3 = batch["has_da3"]
+        batch_has_da3 = any(h.item() if isinstance(h, torch.Tensor) else h
+                           for h in has_da3) if hasattr(has_da3, '__iter__') else bool(has_da3)
 
         optimizer.zero_grad()
 
@@ -112,7 +111,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler=None):
                 pred_depth, pred_seg = model(rgb)
                 losses = criterion(pred_depth, pred_seg, rgb,
                                    gt_depth, gt_seg, confidence,
-                                   da2_depth, batch_has_da2)
+                                   da3_depth, batch_has_da3)
             scaler.scale(losses["total"]).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -122,7 +121,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device, scaler=None):
             pred_depth, pred_seg = model(rgb)
             losses = criterion(pred_depth, pred_seg, rgb,
                                gt_depth, gt_seg, confidence,
-                               da2_depth, batch_has_da2)
+                               da3_depth, batch_has_da3)
             losses["total"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -148,15 +147,15 @@ def validate(model, loader, criterion, device, num_classes=6):
         gt_depth = batch["depth"].to(device)
         gt_seg = batch["seg"].to(device)
         confidence = batch["confidence"].to(device)
-        da2_depth = batch["da2_depth"].to(device)
-        has_da2 = batch["has_da2"]
-        batch_has_da2 = any(h.item() if isinstance(h, torch.Tensor) else h
-                           for h in has_da2) if hasattr(has_da2, '__iter__') else bool(has_da2)
+        da3_depth = batch["da3_depth"].to(device)
+        has_da3 = batch["has_da3"]
+        batch_has_da3 = any(h.item() if isinstance(h, torch.Tensor) else h
+                           for h in has_da3) if hasattr(has_da3, '__iter__') else bool(has_da3)
 
         pred_depth, pred_seg = model(rgb)
         losses = criterion(pred_depth, pred_seg, rgb,
                            gt_depth, gt_seg, confidence,
-                           da2_depth, batch_has_da2)
+                           da3_depth, batch_has_da3)
 
         for k in total_losses:
             total_losses[k] += losses[k].item() if isinstance(losses[k], torch.Tensor) else losses[k]
