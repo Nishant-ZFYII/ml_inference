@@ -31,3 +31,4 @@ Thumbs.db
 
 # HuggingFace cache
 .cache/
+hpc_outputs/
