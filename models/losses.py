@@ -25,18 +25,24 @@ def _image_gradients(x: torch.Tensor):
 
 class HybridDepthLoss(nn.Module):
     """
-    L1 depth loss with hybrid supervision target.
+    L1 depth loss with configurable supervision target.
 
-    Where ToF confidence >= tau  →  supervise to ToF (real metric depth)
-    Where ToF confidence <  tau  →  supervise to DA3 (neural depth)
+    Two modes controlled by `distill_depth`:
 
-    For NYU stand-in: confidence is synthesised from depth validity
-    (1.0 where GT depth > 0, 0.0 where GT depth == 0).
+    distill_depth=True  (pure distillation, use for NYU stand-in):
+        target = DA3 depth everywhere DA3 is available.
+        Falls back to GT/ToF only when DA3 is missing.
+
+    distill_depth=False (hybrid, use for corridor data with real ToF):
+        Where ToF confidence >= tau  →  supervise to ToF (real sensor)
+        Where ToF confidence <  tau  →  supervise to DA3 (neural depth)
     """
 
-    def __init__(self, confidence_threshold: float = 0.5):
+    def __init__(self, confidence_threshold: float = 0.5,
+                 distill_depth: bool = True):
         super().__init__()
         self.tau = confidence_threshold
+        self.distill_depth = distill_depth
 
     def forward(
         self,
@@ -48,14 +54,16 @@ class HybridDepthLoss(nn.Module):
     ) -> torch.Tensor:
 
         if has_da3 and da3_depth is not None:
-            target = torch.where(confidence >= self.tau, tof_depth, da3_depth)
+            if self.distill_depth:
+                target = da3_depth
+            else:
+                target = torch.where(confidence >= self.tau, tof_depth, da3_depth)
         else:
             target = tof_depth
 
-        # Mask out invalid pixels (depth == 0)
         valid = target > 0
         if valid.sum() == 0:
-            return pred_depth.sum() * 0.0  # no valid pixels
+            return pred_depth.sum() * 0.0
 
         return F.l1_loss(pred_depth[valid], target[valid])
 
@@ -101,13 +109,14 @@ class MultiTaskLoss(nn.Module):
         lambda_edge: float = 0.1,
         confidence_threshold: float = 0.5,
         num_classes: int = 6,
+        distill_depth: bool = True,
     ):
         super().__init__()
         self.lambda_depth = lambda_depth
         self.lambda_seg = lambda_seg
         self.lambda_edge = lambda_edge
 
-        self.depth_loss = HybridDepthLoss(confidence_threshold)
+        self.depth_loss = HybridDepthLoss(confidence_threshold, distill_depth)
         self.edge_loss = EdgeAwareSmoothness()
         self.seg_loss = nn.CrossEntropyLoss(ignore_index=255)
 

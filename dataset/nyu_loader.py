@@ -154,20 +154,25 @@ class NYUDepthV2Dataset(Dataset):
 
         seg = remap_labels(seg_raw)
 
-        # Synthesize confidence from depth validity (NYU stand-in for ToF confidence)
         confidence = (depth > 0).astype(np.float32)
 
-        # Load DA3 teacher depth if available
         has_da3 = False
         da3_depth = np.zeros_like(depth)
         if stem in self._teacher_map and self._manifest_base:
             entry = self._teacher_map[stem]
+
             da3_rel = entry.get("da3_depth")
             if da3_rel:
                 da3_path = os.path.join(self._manifest_base, da3_rel)
                 if os.path.exists(da3_path):
                     da3_depth = np.load(da3_path).astype(np.float32)
                     has_da3 = True
+
+            sam2_rel = entry.get("sam2_seg")
+            if sam2_rel:
+                sam2_path = os.path.join(self._manifest_base, sam2_rel)
+                if os.path.exists(sam2_path):
+                    seg = np.load(sam2_path).astype(np.int32)
 
         rgb, depth, seg, confidence, da3_depth = self._transform(
             rgb, depth, seg, confidence, da3_depth
