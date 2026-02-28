@@ -28,7 +28,8 @@ from models.student import build_student
 
 
 def load_model(checkpoint_path: str, device: torch.device, cfg: Config):
-    model = build_student(num_classes=cfg.NUM_CLASSES, pretrained=False)
+    model = build_student(num_classes=cfg.NUM_CLASSES, pretrained=False,
+                          backbone=cfg.BACKBONE)
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if "model" in ckpt:
         model.load_state_dict(ckpt["model"])
@@ -88,9 +89,13 @@ def main():
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--manifest", type=str, required=True)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--backbone", type=str, default=None,
+                        help="timm backbone name (must match checkpoint)")
     args = parser.parse_args()
 
     cfg = Config()
+    if args.backbone:
+        cfg.BACKBONE = args.backbone
 
     if args.device:
         device = torch.device(args.device)

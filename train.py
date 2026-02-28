@@ -51,6 +51,8 @@ def parse_args():
     p.add_argument("--dataset", type=str, default="nyu",
                    choices=["nyu", "tum", "corridor"],
                    help="Dataset to train on (default: nyu)")
+    p.add_argument("--backbone", type=str, default=None,
+                   help="timm backbone name (default: config BACKBONE)")
     return p.parse_args()
 
 
@@ -74,6 +76,8 @@ def apply_args(cfg: Config, args):
         cfg.MANIFEST_PATH = args.manifest
     if args.num_workers is not None:
         cfg.NUM_WORKERS = args.num_workers
+    if args.backbone is not None:
+        cfg.BACKBONE = args.backbone
 
 
 def compute_metrics(pred_depth, gt_depth, pred_seg, gt_seg, num_classes=6):
@@ -234,7 +238,9 @@ def main():
           f"Val: {len(val_loader.dataset)} samples")
 
     # Model
-    model = build_student(num_classes=cfg.NUM_CLASSES, pretrained=True)
+    print(f"Backbone: {cfg.BACKBONE}")
+    model = build_student(num_classes=cfg.NUM_CLASSES, pretrained=True,
+                          backbone=cfg.BACKBONE)
     model = model.to(device)
 
     if args.freeze_encoder:

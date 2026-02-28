@@ -131,6 +131,8 @@ class MultiTaskStudent(nn.Module):
         return depth, seg
 
 
-def build_student(num_classes: int = 6, pretrained: bool = True) -> MultiTaskStudent:
+def build_student(num_classes: int = 6, pretrained: bool = True,
+                   backbone: str = "efficientvit_b1.r288_in1k") -> MultiTaskStudent:
     """Factory function to build the student model."""
-    return MultiTaskStudent(num_classes=num_classes, pretrained=pretrained)
+    return MultiTaskStudent(num_classes=num_classes, pretrained=pretrained,
+                            backbone_name=backbone)

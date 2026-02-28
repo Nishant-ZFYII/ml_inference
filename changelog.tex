@@ -865,7 +865,44 @@ $f_y=521.0$. Averaged for DA3: $f_x=519.1$, $f_y=518.75$.
     (demonstrates dataset-agnosticism)
 \end{enumerate}
 
-\textbf{Status:} Code complete. Awaiting execution.
+\textbf{Status:} Code complete. TUM teacher inference in progress
+(DA3 complete: 1773/1773, SAM2 running).
+
+\subsection{Iteration 7b: EfficientViT-B2 on NYU (Pending)}
+
+Parallel experiment: same dataset and training config as Iteration 6 but
+with a larger backbone.
+
+\begin{itemize}[nosep]
+  \item \textbf{Backbone:} EfficientViT-B2 (\texttt{efficientvit\_b2.r224\_in1k})
+  \item \textbf{Parameters:} $\sim$15.4M (vs B1's 5.3M, $\sim$3$\times$ larger)
+  \item \textbf{Dataset:} NYU Depth V2 (same 1449 samples as Iter 5--6)
+  \item \textbf{Training:} 200 epochs, LR $3 \times 10^{-4}$,
+    uncertainty weighting, per-task checkpoints
+\end{itemize}
+
+\subsubsection{Pipeline Changes}
+
+\begin{itemize}[nosep]
+  \item \texttt{models/student.py}: \texttt{build\_student()} now accepts
+    \texttt{backbone} parameter. Channel sizes are read dynamically from
+    \texttt{timm}, so the decoder auto-adapts to any EfficientViT variant.
+  \item \texttt{train.py}: Added \texttt{-{}-backbone} flag (e.g.\
+    \texttt{-{}-backbone efficientvit\_b2.r224\_in1k}).
+  \item \texttt{eval\_distillation.py}: Added \texttt{-{}-backbone} flag
+    so the correct architecture is loaded for evaluation.
+  \item \texttt{train\_iter7b\_b2.slurm} (NEW): SLURM script for B2 on NYU.
+\end{itemize}
+
+\subsubsection{Purpose}
+
+This controls for dataset size: B1 vs B2 on the \emph{same} NYU data.
+If B2 improves significantly, backbone capacity was the bottleneck.
+If B2 does not improve (or overfits more), then data size is the
+bottleneck --- confirming the TUM experiment (Iter 7) as the right path.
+
+\textbf{Status:} Code complete. Can run in parallel with Iter 7 teacher
+inference.
 
 % ============================================================================
 \section{Comparison: v1 vs v3}
@@ -1053,7 +1090,8 @@ can proceed with the current checkpoints.
 \texttt{config.py}             & Rewritten: EfficientViT-B1 backbone, DA3 model ID, NYU intrinsics, da2$\to$da3 field renames \\
 \texttt{models/student.py}     & Rewritten: \texttt{timm} EfficientViT-B1 encoder, decoder channels from \texttt{print\_model\_shapes.py} \\
 \texttt{models/losses.py}      & da2$\to$da3 renames; Iter 5: pure distillation; Iter 6: uncertainty weighting \\
-\texttt{train.py}              & da2$\to$da3 renames, \texttt{-{}-freeze-encoder}; Iter 6: \texttt{-{}-uncertainty-weighting}, per-task checkpoints; Iter 7: \texttt{-{}-dataset} flag \\
+\texttt{models/student.py}     & Iter 7b: \texttt{build\_student()} accepts \texttt{backbone} param, auto-adapts channels \\
+\texttt{train.py}              & da2$\to$da3 renames, \texttt{-{}-freeze-encoder}; Iter 6: \texttt{-{}-uncertainty-weighting}; Iter 7: \texttt{-{}-dataset}; Iter 7b: \texttt{-{}-backbone} \\
 \texttt{train.slurm}           & Added \texttt{-{}-manifest}, l40s\_public partition, torch\_pr\_742\_general account \\
 \texttt{dataset/nyu\_loader.py}  & da2$\to$da3 renames, manifest path fix; Iter 5: manifest coverage print, GT fallback warning \\
 \texttt{dataset/tum\_loader.py}      & NEW: TUM RGB-D loader with same dict interface as NYU/corridor \\
@@ -1068,7 +1106,8 @@ can proceed with the current checkpoints.
 \texttt{teacher\_infer/teacher\_infer.slurm} & DA3 steps, verify script; Iter 5: all 1449 images (not just val) \\
 \texttt{train\_iter6.slurm}     & NEW: separate SLURM script for Iter 6 (\texttt{checkpoints\_iter6/}, \texttt{runs\_iter6/}) \\
 \texttt{train\_iter7.slurm}     & NEW: TUM training with \texttt{-{}-dataset tum}, uncertainty weighting \\
-\texttt{eval\_distillation.py}  & DA3 metrics, fixed checkpoint loading (\texttt{ckpt["model"]}) \\
+\texttt{train\_iter7b\_b2.slurm} & NEW: EfficientViT-B2 on NYU (backbone comparison) \\
+\texttt{eval\_distillation.py}  & DA3 metrics, fixed checkpoint loading; Iter 7b: \texttt{-{}-backbone} flag \\
 \texttt{print\_model\_shapes.py} & Rewritten for EfficientViT-B1 feature inspection \\
 \texttt{setup\_hpc.sh}         & anaconda3/2025.06, DA3 source install, timm, SAM2 checkpoint download \\
 \texttt{requirements.txt}      & Added \texttt{timm} \\
@@ -1110,6 +1149,7 @@ Feb 28, 2026 & Iter 5 eval: RMSE 0.993m, mIoU 30.0\% (first pure distillation) \
 Feb 28, 2026 & Iter 6: uncertainty weighting + per-task checkpoints \\
 Feb 28, 2026 & Iter 6 eval: depth RMSE 0.998m (best\_depth), seg mIoU 46.5\% (best\_seg) \\
 Feb 28, 2026 & Iter 7: TUM RGB-D integration (prep script, loader, teacher SLURM, train SLURM) \\
+Feb 28, 2026 & Iter 7b: EfficientViT-B2 backbone experiment on NYU (code ready) \\
 \bottomrule
 \end{longtable}
 
