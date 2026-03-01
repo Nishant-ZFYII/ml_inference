@@ -2115,6 +2115,155 @@ $\delta < 1.25$  & 63.3\% & 64.4\% & $+1.1$pp \\
 \end{longtable}
 
 % ----------------------------------------------------------------------------
+\subsection{V4 Corridor Evaluation (Iteration 10)}
+\label{sec:vivek-corridor}
+% ----------------------------------------------------------------------------
+
+V4 achieves 0.774\,m RMSE on NYU---but NYU is cluttered bedrooms and kitchens,
+not hallways. This iteration tests whether V4's NYU improvement translates
+to the actual deployment corridor (459 frames from the Femto Bolt rosbag).
+
+\subsubsection{Methodology}
+
+Vivek's V4 \texttt{best\_depth.pt} checkpoint was evaluated using the same
+\texttt{eval\_corridor\_depth.py} pipeline used for Iteration~8
+(Section~\ref{sec:corridor-eval}).
+
+\textbf{Model loading note:} Vivek's model applies ImageNet normalisation
+($\mu = [0.485, 0.456, 0.406]$, $\sigma = [0.229, 0.224, 0.225]$) inside
+\texttt{forward()}, stored as registered buffers \texttt{img\_mean} /
+\texttt{img\_std}. Our model architecture does not include these buffers.
+To handle this:
+\begin{itemize}[nosep]
+  \item Added \texttt{-{}-imagenet-norm} flag to \texttt{eval\_corridor\_depth.py}
+    that applies ImageNet normalisation in the evaluation script before feeding
+    the tensor to the model.
+  \item Used \texttt{strict=False} for \texttt{load\_state\_dict}, which
+    ignores the extra buffer keys (\texttt{img\_mean}, \texttt{img\_std}).
+  \item The underlying model architecture (encoder channels, decoder blocks,
+    heads) is identical between both codebases---only the normalisation
+    placement differs.
+\end{itemize}
+
+\textbf{Architecture verification:} Vivek's \texttt{student.py} maps
+\texttt{efficientvit\_b1} to \texttt{efficientvit\_b1.r224\_in1k} (pretrained
+at 224$\times$224). Our code uses \texttt{efficientvit\_b1.r288\_in1k}
+(pretrained at 288$\times$288). Both produce identical architecture with
+channels $[32, 64, 128, 256]$---only the pretrained weights differ, and those
+are overwritten by the fine-tuned checkpoint anyway.
+
+\textbf{Initial error:} The first attempt used \texttt{best.pt} (18\,MB),
+which was actually Vivek's V3 (MobileNetV3-Small) checkpoint with channels
+$[16, 24, 40, 576]$. This caused shape mismatches. The correct V4 checkpoint
+is \texttt{best\_depth.pt} (62\,MB, EfficientViT-B1).
+
+\subsubsection{Results}
+
+\begin{longtable}{lrrrr}
+\toprule
+\textbf{Region} & \textbf{RMSE (m)} & \textbf{MAE (m)} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Region} & \textbf{RMSE (m)} & \textbf{MAE (m)} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endhead
+\multicolumn{5}{l}{\textbf{V4 best\_depth.pt (ImageNet norm = True)}} \\
+\midrule
+All valid          & 1.373 & 1.269 & 2.356 &  8.7\% \\
+Near (0.3--1.0\,m) & 1.434 & 1.390 & 2.920 &  0.0\% \\
+Mid (1.0--2.0\,m)  & 1.180 & 1.030 & 0.785 & 11.7\% \\
+Far (2.0--4.0\,m)  & 1.276 & 0.906 & 0.314 & 53.3\% \\
+Top 2/3 (walls)    & 1.363 & 1.219 & 1.598 & 12.6\% \\
+Bottom 1/3 (floor) & 1.396 & 1.380 & 4.042 &  0.0\% \\
+\midrule
+\multicolumn{5}{l}{\textbf{Iter 6 best\_depth.pt (baseline, no ImageNet norm)}} \\
+\midrule
+All valid          & 2.777 & 2.676 & 4.808 &  2.3\% \\
+Near (0.3--1.0\,m) & 2.922 & 2.857 & 5.937 &  0.0\% \\
+Mid (1.0--2.0\,m)  & 2.936 & 2.866 & 2.125 &  0.0\% \\
+Far (2.0--4.0\,m)  & 1.982 & 1.835 & 0.685 & 10.1\% \\
+Top 2/3 (walls)    & 2.800 & 2.667 & 3.438 &  3.3\% \\
+Bottom 1/3 (floor) & 2.723 & 2.696 & 7.858 &  0.0\% \\
+\bottomrule
+\end{longtable}
+
+\subsubsection{Comparative Analysis: All Models on Corridor Data}
+
+\begin{longtable}{llrrrr}
+\toprule
+\textbf{Model} & \textbf{Source} & \textbf{RMSE} & \textbf{MAE} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Model} & \textbf{Source} & \textbf{RMSE} & \textbf{MAE} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endhead
+DA3-METRIC-LARGE (med-scaled) & Teacher & \textbf{0.586} & \textbf{0.224} & \textbf{0.163} & \textbf{66.5\%} \\
+DA3-SMALL (med-scaled)        & Jetson cand. & 0.596 & 0.301 & 0.221 & 56.1\% \\
+V4 best\_depth.pt             & Student (V4)   & 1.373 & 1.269 & 2.356 &  8.7\% \\
+B2 best\_depth.pt (Iter 7b)   & Student (B2)   & 2.356 & --- & --- & --- \\
+B1 best\_depth.pt (Iter 6)    & Student (B1)   & 2.777 & 2.676 & 4.808 &  2.3\% \\
+\bottomrule
+\end{longtable}
+
+\subsubsection{Analysis}
+
+\begin{enumerate}[nosep]
+  \item \textbf{V4 halves the corridor error vs Iter~6.}
+    RMSE drops from 2.777\,m to 1.373\,m ($-50.5\%$). This confirms that
+    Vivek's training recipe improvements (berHu loss, encoder/decoder LR split,
+    freeze warmup, tighter Kendall clamping) genuinely improve generalisation,
+    not just NYU overfitting.
+
+  \item \textbf{The domain gap remains the dominant problem.}
+    On NYU, V4 achieves 0.774\,m RMSE. On the corridor, it achieves 1.373\,m
+    ($1.77\times$ worse). Iter~6 shows a $2.78\times$ NYU-to-corridor ratio.
+    V4's training recipe reduces this ratio, but does not close the gap.
+
+  \item \textbf{Near-range depth is catastrophically overestimated.}
+    At 0.3--1.0\,m, AbsRel = 2.92 means predictions are $\sim$3$\times$ the
+    true depth. The model has never seen long, narrow corridors during
+    training (NYU images are cluttered rooms) and maps corridor geometry
+    to room-like depth scales. Floor pixels (bottom 1/3) are worst:
+    AbsRel = 4.04, $\delta < 1.25$ = 0.0\%.
+
+  \item \textbf{Far-range depth is reasonable.}
+    At 2.0--4.0\,m, RMSE = 1.276\,m, $\delta < 1.25$ = 53.3\%. This range
+    overlaps with NYU room depths and is where the model's training data is
+    representative.
+
+  \item \textbf{DA3-Small remains $2.3\times$ better.}
+    DA3-Small (median-scaled) achieves 0.596\,m RMSE---still far ahead of
+    V4's 1.373\,m. The distillation gap has narrowed from $4.7\times$
+    (Iter~6 vs DA3-Small) to $2.3\times$ (V4 vs DA3-Small), but direct
+    DA3-Small deployment on Jetson remains the clearly superior strategy
+    for corridor navigation.
+
+  \item \textbf{Architecture is not the bottleneck---data is.}
+    Both codebases produce identical model architectures.  The only
+    difference was normalisation placement (inside \texttt{forward()} vs
+    in the eval script), handled by \texttt{-{}-imagenet-norm}. The
+    remaining corridor error is a data distribution problem, not a model
+    capacity or code issue.
+\end{enumerate}
+
+\subsubsection{Pipeline Changes}
+
+\begin{longtable}{lp{8cm}}
+\toprule
+\textbf{File} & \textbf{Change} \\
+\midrule
+\texttt{eval\_corridor\_depth.py} & Added \texttt{-{}-imagenet-norm} flag for
+  ImageNet normalisation before inference. Added \texttt{strict=False}
+  checkpoint loading with missing/unexpected key reporting. \\
+\texttt{eval\_corridor\_v4.slurm} & NEW: SLURM script to evaluate V4
+  \texttt{best\_depth.pt} with \texttt{-{}-imagenet-norm} and Iter~6
+  baseline comparison. \\
+\bottomrule
+\end{longtable}
+
+% ----------------------------------------------------------------------------
 \subsection{Conclusion and Status}
 \label{sec:vivek-conclusion}
 % ----------------------------------------------------------------------------
@@ -2123,22 +2272,21 @@ V4 (EfficientViT-B1 + training optimizations) is the \textbf{best single-checkpo
 result} across all experiments:
 
 \begin{itemize}[nosep]
-  \item \textbf{Depth RMSE:} 0.774\,m (previously 0.998\,m, $-22\%$)
+  \item \textbf{NYU Depth RMSE:} 0.774\,m (previously 0.998\,m, $-22\%$)
+  \item \textbf{Corridor Depth RMSE:} 1.373\,m (previously 2.777\,m, $-50\%$)
   \item \textbf{Seg mIoU:} 51.0\% (previously 50.2\%, $+0.8$pp)
   \item \textbf{Depth structure:} correlation $r = 0.83$ with NYU GT
-  \item \textbf{Key wins:} wall IoU 73\% ($+51$pp), glass IoU 19\% (first detection),
-    floor IoU 77\% ($+9$pp)
 \end{itemize}
 
-This result demonstrates that the combination of (a) sufficient backbone
-capacity (EfficientViT-B1, 5.31M params), (b) stable multi-task loss
-(Kendall v2 with clamping), and (c) proper training protocol (berHu, LR split,
-freeze warmup) is necessary and sufficient for sub-0.8\,m depth RMSE on
-NYU Depth V2 via pure distillation.
+However, corridor evaluation confirms that \textbf{the student model cannot
+match DA3-Small's accuracy} (0.596\,m) for navigation-grade depth estimation
+in the deployment corridor. The $2.3\times$ gap is driven by the NYU
+training domain (cluttered rooms) being fundamentally different from
+the corridor domain (long, parallel walls).
 
-\textbf{Status:} V4 training and evaluation complete. Model ready for
-ONNX export and TensorRT deployment on Jetson.
-
-\end{document}
+\textbf{Deployment recommendation:} Direct DA3-Small (TensorRT FP16) on
+the Jetson Orin Nano remains the primary depth strategy. Vivek continues
+to improve the student architecture for potential future use if corridor-specific
+training data becomes available.
 
 \end{document}
