@@ -42,21 +42,24 @@ echo "=== DA3 Corridor Depth Evaluation ==="
 echo "Manifest: $MANIFEST"
 echo ""
 
-# ── DA3-Small (this is what runs on Jetson) ────────────────────────────────
+# ── DA3METRIC-LARGE (teacher — metric depth, accuracy ceiling) ─────────────
 echo "=========================================="
-echo "=== DA3-Small (Jetson deployment model) ==="
+echo "=== DA3METRIC-LARGE (teacher / ceiling) ==="
 echo "=========================================="
 python eval_corridor_da3.py \
-    --model-id depth-anything/da3metric-small \
+    --model-id depth-anything/DA3METRIC-LARGE \
     --manifest "$MANIFEST"
 echo ""
 
-# ── DA3-Large (teacher / accuracy ceiling) ─────────────────────────────────
+# ── DA3-SMALL (Jetson candidate — relative depth, median-scaled) ──────────
+# DA3-SMALL outputs relative depth only. We median-scale each frame to
+# show best-case accuracy if properly calibrated on the Jetson.
 echo "=========================================="
-echo "=== DA3-Large (teacher / ceiling) ==="
+echo "=== DA3-SMALL (Jetson candidate, median-scaled) ==="
 echo "=========================================="
 python eval_corridor_da3.py \
-    --model-id depth-anything/da3metric-large \
+    --model-id depth-anything/DA3-SMALL \
+    --relative \
     --manifest "$MANIFEST"
 echo ""
 

@@ -3,24 +3,26 @@
 Evaluate DA3 depth predictions directly against real sensor depth from the
 Orbbec Femto Bolt in the deployment corridor.
 
-This answers the critical question: what is DA3-Small's actual RMSE in the
-corridor? That number determines whether direct Jetson deployment is viable.
+This answers: what is DA3's actual RMSE in the corridor?
+That number determines whether direct Jetson deployment is viable.
 
-Reads intrinsics.json from the corridor data directory (saved by
-extract_corridor_bag.py) for the metric depth conversion.
+For DA3METRIC models: uses focal * raw / 300 for metric conversion.
+For DA3-SMALL/BASE/LARGE (relative): applies median-scaling alignment
+to show best-case accuracy if properly calibrated.
 
 Usage:
     python eval_corridor_da3.py \
-        --model-id depth-anything/da3metric-small \
+        --model-id depth-anything/DA3METRIC-LARGE \
         --manifest $SCRATCH/corridor_eval_data/manifest.jsonl
 
     python eval_corridor_da3.py \
-        --model-id depth-anything/da3metric-large \
+        --model-id depth-anything/DA3-SMALL --relative \
         --manifest $SCRATCH/corridor_eval_data/manifest.jsonl
 """
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -38,21 +40,35 @@ def load_da3_model(model_id: str, device: torch.device):
     return model
 
 
-def infer_single(model, img_path: str, focal: float) -> np.ndarray:
+def infer_single(model, img_path: str, focal: float,
+                 is_relative: bool) -> np.ndarray:
     rgb = Image.open(img_path).convert("RGB")
     orig_w, orig_h = rgb.size
 
     prediction = model.inference([img_path])
     raw_depth = prediction.depth[0]
 
-    metric_depth = focal * raw_depth / 300.0
+    if is_relative:
+        depth_out = raw_depth.astype(np.float32)
+    else:
+        depth_out = (focal * raw_depth / 300.0).astype(np.float32)
 
-    if metric_depth.shape != (orig_h, orig_w):
-        depth_pil = Image.fromarray(metric_depth)
+    if depth_out.shape != (orig_h, orig_w):
+        depth_pil = Image.fromarray(depth_out)
         depth_pil = depth_pil.resize((orig_w, orig_h), Image.BILINEAR)
-        metric_depth = np.array(depth_pil, dtype=np.float32)
+        depth_out = np.array(depth_pil, dtype=np.float32)
 
-    return metric_depth.astype(np.float32)
+    return depth_out
+
+
+def median_scale_align(pred, gt, valid_mask):
+    """Scale relative depth so its median matches GT median on valid pixels."""
+    p_valid = pred[valid_mask]
+    g_valid = gt[valid_mask]
+    if len(p_valid) == 0 or np.median(p_valid) < 1e-8:
+        return pred
+    scale = np.median(g_valid) / np.median(p_valid)
+    return pred * scale
 
 
 def compute_depth_metrics(pred, gt, mask):
@@ -84,9 +100,12 @@ def main():
         description="Evaluate DA3 depth vs corridor sensor depth")
     parser.add_argument("--model-id", type=str, required=True,
                         help="HuggingFace model ID "
-                             "(e.g. depth-anything/da3metric-small)")
+                             "(e.g. depth-anything/DA3METRIC-LARGE)")
     parser.add_argument("--manifest", type=str, required=True)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--relative", action="store_true",
+                        help="Model outputs relative depth (DA3-SMALL/BASE/LARGE). "
+                             "Applies per-frame median-scaling to align to sensor.")
     parser.add_argument("--min-depth", type=float, default=0.1)
     parser.add_argument("--max-depth", type=float, default=5.0)
     args = parser.parse_args()
@@ -100,19 +119,22 @@ def main():
 
     manifest_dir = Path(args.manifest).parent
 
-    # Read color camera intrinsics for metric conversion
-    intr_path = manifest_dir / "intrinsics.json"
-    if intr_path.exists():
-        with open(intr_path) as f:
-            intr = json.load(f)
-        focal = (intr["fx"] + intr["fy"]) / 2.0
-        print(f"Intrinsics: fx={intr['fx']:.2f} fy={intr['fy']:.2f} → "
-              f"focal={focal:.2f}")
-    else:
-        focal = 605.0
-        print(f"WARNING: intrinsics.json not found, using default focal={focal}")
+    focal = 0.0
+    if not args.relative:
+        intr_path = manifest_dir / "intrinsics.json"
+        if intr_path.exists():
+            with open(intr_path) as f:
+                intr = json.load(f)
+            focal = (intr["fx"] + intr["fy"]) / 2.0
+            print(f"Intrinsics: fx={intr['fx']:.2f} fy={intr['fy']:.2f} → "
+                  f"focal={focal:.2f}")
+        else:
+            focal = 605.0
+            print(f"WARNING: intrinsics.json not found, using default focal={focal}")
 
+    mode_str = "RELATIVE (median-scaled)" if args.relative else "METRIC"
     print(f"Model: {args.model_id}")
+    print(f"Mode: {mode_str}")
     print(f"Device: {device}")
     print(f"Valid depth range: [{args.min_depth}, {args.max_depth}] m")
 
@@ -136,16 +158,12 @@ def main():
         rgb_path = str(manifest_dir / entry["rgb"])
         depth_path = manifest_dir / entry["sensor_depth"]
 
-        import time
         t0 = time.time()
-        pred_d = infer_single(model, rgb_path, focal)
+        pred_d = infer_single(model, rgb_path, focal, args.relative)
         latencies.append(time.time() - t0)
 
         sensor_depth = np.load(depth_path).astype(np.float32)
 
-        # DA3 output matches the original RGB resolution.
-        # Sensor depth was saved at color camera resolution by extract_corridor_bag.
-        # They should match, but resize if needed.
         if pred_d.shape != sensor_depth.shape:
             pred_pil = Image.fromarray(pred_d)
             pred_pil = pred_pil.resize(
@@ -153,6 +171,10 @@ def main():
             pred_d = np.array(pred_pil, dtype=np.float32)
 
         valid = (sensor_depth >= args.min_depth) & (sensor_depth <= args.max_depth)
+
+        if args.relative:
+            pred_d = median_scale_align(pred_d, sensor_depth, valid)
+
         sensor_zero = sensor_depth == 0
         sensor_far = sensor_depth > args.max_depth
 
@@ -175,7 +197,8 @@ def main():
     model_short = args.model_id.split("/")[-1]
     print()
     print("=" * 75)
-    print(f"Corridor Depth Evaluation — {model_short} (Direct Teacher)")
+    print(f"Corridor Depth Evaluation — {model_short} "
+          f"({'Relative+MedianScale' if args.relative else 'Metric'})")
     print("=" * 75)
     print(f"Model: {args.model_id}")
     print(f"Frames: {len(samples)}")
