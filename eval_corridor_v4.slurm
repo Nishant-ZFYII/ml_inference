@@ -12,10 +12,13 @@
 #SBATCH --error=%x-%j.err
 
 # ============================================================================
-# Corridor Depth Evaluation — Vivek's V4 Checkpoint
+# Corridor Depth Evaluation — Vivek's V4 (EfficientViT-B1)
 #
-# Tests whether V4's improved 0.774m NYU RMSE (vs Iter 6's 0.998m)
-# translates to better corridor performance.
+# V4 achieves 0.774m RMSE on NYU (vs Iter 6's 0.998m).
+# This tests whether that improvement translates to the corridor.
+#
+# Key difference from our checkpoints: Vivek's model applies ImageNet
+# normalization inside forward(), so we must pass --imagenet-norm.
 #
 # Previous corridor results:
 #   B1 (Iter 6):  RMSE 2.777m
@@ -23,9 +26,8 @@
 #   DA3-Small:    RMSE 0.596m (median-scaled)
 #
 # Prerequisites:
-#   1. corridor_eval_data already on HPC at $SCRATCH/corridor_eval_data/
-#   2. V4 checkpoint transferred:
-#      scp vivek_v4_best.pt np3129@dtn.torch.hpc.nyu.edu:$SCRATCH/checkpoints_v4/
+#   1. corridor_eval_data at $SCRATCH/corridor_eval_data/
+#   2. V4 checkpoint at $SCRATCH/checkpoints_v4/vivek_v4_best_depth.pt
 # ============================================================================
 
 set -euo pipefail
@@ -50,33 +52,24 @@ echo "=== Corridor Depth Evaluation — Vivek V4 ==="
 echo "Manifest: $MANIFEST"
 echo ""
 
-# ── V4 best.pt (EfficientViT-B1, Vivek's training recipe) ────────────────
-CKPT_V4=$SCRATCH/checkpoints_v4/vivek_v4_best.pt
+# ── V4 best_depth.pt (EfficientViT-B1, Vivek's training recipe) ──────────
+# Uses --imagenet-norm because Vivek's model normalises inside forward().
+CKPT_V4=$SCRATCH/checkpoints_v4/vivek_v4_best_depth.pt
 if [ -f "$CKPT_V4" ]; then
-    echo "--- V4 best.pt (Vivek, EfficientViT-B1) ---"
+    echo "--- V4 best_depth.pt (Vivek, EfficientViT-B1) ---"
     python eval_corridor_depth.py \
         --checkpoint "$CKPT_V4" \
-        --manifest "$MANIFEST"
+        --manifest "$MANIFEST" \
+        --imagenet-norm
     echo ""
 else
     echo "SKIP: $CKPT_V4 not found"
     echo "  Transfer it first:"
-    echo "  scp vivek_v4_best.pt np3129@dtn.torch.hpc.nyu.edu:\$SCRATCH/checkpoints_v4/"
+    echo "  scp vivek_v4_best_depth.pt np3129@dtn.torch.hpc.nyu.edu:\$SCRATCH/checkpoints_v4/"
 fi
 
-# ── V4 best_depth.pt (if available) ──────────────────────────────────────
-CKPT_V4_DEPTH=$SCRATCH/checkpoints_v4/vivek_v4_best_depth.pt
-if [ -f "$CKPT_V4_DEPTH" ]; then
-    echo "--- V4 best_depth.pt (Vivek, depth-specific) ---"
-    python eval_corridor_depth.py \
-        --checkpoint "$CKPT_V4_DEPTH" \
-        --manifest "$MANIFEST"
-    echo ""
-else
-    echo "INFO: $CKPT_V4_DEPTH not found (optional — skip)"
-fi
-
-# ── Comparison reference: re-run Iter 6 B1 for side-by-side ─────────────
+# ── Comparison: re-run Iter 6 B1 for side-by-side ────────────────────────
+# Does NOT use --imagenet-norm (our model does not normalise internally).
 CKPT_B1=$SCRATCH/checkpoints_iter6/best_depth.pt
 if [ -f "$CKPT_B1" ]; then
     echo "--- B1 best_depth.pt (Iter 6, baseline comparison) ---"

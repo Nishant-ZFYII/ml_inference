@@ -21,6 +21,12 @@ Usage:
         --checkpoint best_depth.pt \
         --manifest corridor_eval_data/manifest.jsonl \
         --backbone efficientvit_b2.r224_in1k
+
+    # For checkpoints trained with ImageNet normalization inside the model:
+    python eval_corridor_depth.py \
+        --checkpoint vivek_v4_best_depth.pt \
+        --manifest corridor_eval_data/manifest.jsonl \
+        --imagenet-norm
 """
 
 import argparse
@@ -90,6 +96,10 @@ def main():
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--backbone", type=str, default=None,
                         help="timm backbone name (must match checkpoint)")
+    parser.add_argument("--imagenet-norm", action="store_true",
+                        help="Apply ImageNet normalization before inference. "
+                             "Required for checkpoints trained with normalization "
+                             "inside the model (e.g. Vivek's V4).")
     parser.add_argument("--min-depth", type=float, default=0.1,
                         help="Min valid sensor depth in metres (default: 0.1)")
     parser.add_argument("--max-depth", type=float, default=5.0,
@@ -107,8 +117,14 @@ def main():
     else:
         device = torch.device("cpu")
 
+    imagenet_norm = args.imagenet_norm
+    if imagenet_norm:
+        img_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+        img_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
+
     print(f"Backbone: {cfg.BACKBONE}")
     print(f"Checkpoint: {args.checkpoint}")
+    print(f"ImageNet norm: {imagenet_norm}")
     print(f"Device: {device}")
     print(f"Valid depth range: [{args.min_depth}, {args.max_depth}] m")
 
@@ -137,6 +153,8 @@ def main():
         rgb = rgb.resize((W, H), Image.BILINEAR)
         rgb_np = np.array(rgb, dtype=np.float32) / 255.0
         rgb_t = torch.from_numpy(rgb_np.transpose(2, 0, 1)).unsqueeze(0).to(device)
+        if imagenet_norm:
+            rgb_t = (rgb_t - img_mean) / img_std
 
         sensor_depth = np.load(depth_path).astype(np.float32)
         # Resize sensor depth to model resolution using nearest (no interpolation artifacts)
