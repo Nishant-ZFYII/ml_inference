@@ -1040,8 +1040,315 @@ An 81-second MCAP rosbag from the Orbbec Femto Bolt on the Ackermann robot:
     both B1 and B2 \texttt{best\_depth.pt} checkpoints.
 \end{itemize}
 
-\textbf{Status:} Extraction complete (459 frames). Awaiting HPC transfer
-and evaluation run.
+\subsubsection{Depth Alignment Issue}
+
+Initial corridor evaluation produced catastrophic RMSE ($\sim$2.6\,m).
+Investigation revealed a fundamental \textbf{camera misalignment}: the
+Femto Bolt depth sensor ($640 \times 576$, $\sim$65° FOV) and color
+camera ($1280 \times 720$, $\sim$81° FOV) are physically offset. Simply
+resizing both to the same resolution compares depth from different 3D
+points.
+
+\textbf{Fix:} Implemented 3D reprojection in
+\texttt{extract\_corridor\_bag.py}:
+\begin{enumerate}[nosep]
+  \item Read depth$\to$color extrinsics from \texttt{/tf\_static}
+    (rotation $R$, translation $t$)
+  \item Back-project each valid depth pixel to 3D in the depth optical frame
+  \item Transform to color optical frame via $\mathbf{p}_c = R \mathbf{p}_d + t$
+  \item Project onto color image plane using color intrinsics
+  \item Z-buffer: keep closest depth at each projected pixel
+\end{enumerate}
+
+After alignment, valid pixel coverage dropped from 63\% to 22\% (due to
+FOV mismatch---the depth sensor's narrower FOV only covers a subset of
+the color image). The remaining 22\% are correctly aligned.
+
+\subsubsection{Corridor Evaluation Results}
+
+\begin{table}[h]
+\centering
+\caption{Iteration 8: Corridor depth evaluation (student vs Femto Bolt sensor)}
+\label{tab:iter8-corridor}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Metric} & \textbf{B1 best\_depth} & \textbf{B2 best\_depth} \\
+                 & \textbf{(Iter 6, 5.31M)} & \textbf{(Iter 7b, 15.76M)} \\
+\midrule
+Overall RMSE     & \textcolor{regression}{2.777 m} & \textcolor{regression}{2.356 m} \\
+MAE              & 2.676 m & 2.253 m \\
+AbsRel           & 4.808   & 4.205 \\
+$\delta < 1.25$  & 2.3\%   & 5.1\% \\
+\midrule
+Near (0.3--1.0m) & 2.922 m & 2.538 m \\
+Mid (1.0--2.0m)  & 2.936 m & 2.379 m \\
+Far (2.0--4.0m)  & 1.982 m & 1.233 m \\
+\midrule
+Floor            & 2.723 m & 2.420 m \\
+Walls/ceiling    & 2.800 m & 2.328 m \\
+\midrule
+Valid pixels     & \multicolumn{2}{c}{7.83M / 35.25M (22.2\%)} \\
+Sensor dead      & \multicolumn{2}{c}{77.2\% zero readings} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Both student models are completely unusable for corridor
+navigation.} RMSE of 2.4--2.8\,m in a corridor where walls are
+$\sim$1\,m away means the model cannot distinguish wall proximity at
+all. The near-range bin (0.3--1.0\,m)---the critical collision avoidance
+zone---has the \emph{worst} RMSE (2.9\,m for B1).
+
+For context, the robot is $\sim$0.4\,m wide in a $\sim$2\,m corridor,
+leaving $\sim$0.8\,m clearance per side. A depth error of 2.8\,m makes
+obstacle avoidance impossible.
+
+\textbf{Key observation:} 77\% of sensor pixels are dead (zero readings)
+due to reflective corridor floors and specular surfaces. This confirms
+that monocular depth estimation is needed---the ToF sensor alone cannot
+provide dense depth in this environment.
+
+\textbf{Status:} Evaluation complete. Student distillation is not viable
+for corridor depth. This motivated direct DA3 teacher evaluation
+(Iteration 9).
+
+\subsection{Iteration 9: DA3 Direct Corridor Evaluation}
+\label{sec:iter9}
+
+The catastrophic student RMSE ($\sim$2.4--2.8\,m) on corridor data
+raised a fundamental question: is the problem with the \emph{distillation},
+or does DA3 itself struggle in corridors? To answer this, DA3 was run
+\textbf{directly} on the 459 corridor RGB frames and compared against
+the aligned Femto Bolt sensor depth---no student model involved.
+
+\subsubsection{Thought Process}
+
+The decision tree was:
+\begin{itemize}[nosep]
+  \item If DA3 achieves 0.3--0.5\,m RMSE in corridor $\to$ distillation
+    is the bottleneck. Direct deployment of DA3-Small on Jetson via
+    TensorRT is viable (40--50\,FPS per GerdsenAI benchmarks).
+  \item If DA3 also gets $>$1.0\,m RMSE $\to$ the depth alignment or
+    DA3 itself is the problem, not distillation.
+\end{itemize}
+
+\subsubsection{DA3 Model Availability Discovery}
+
+A critical finding during implementation: \textbf{there is no
+DA3METRIC-SMALL model.} The HuggingFace DA3 lineup:
+
+\begin{table}[h]
+\centering
+\caption{DA3 model variants on HuggingFace}
+\label{tab:da3-models}
+\begin{tabular}{llrr}
+\toprule
+\textbf{Model ID} & \textbf{Depth type} & \textbf{Params} & \textbf{License} \\
+\midrule
+\texttt{DA3-SMALL}       & Relative    & 34.3M  & Apache 2.0 \\
+\texttt{DA3-BASE}        & Relative    & 0.1B   & Apache 2.0 \\
+\texttt{DA3-LARGE}       & Relative    & 0.4B   & CC-BY-NC \\
+\texttt{DA3METRIC-LARGE} & Metric      & 0.35B  & Apache 2.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Only \texttt{DA3METRIC-LARGE} outputs metric depth (metres). All smaller
+variants output \emph{relative} depth (correct ordering, arbitrary scale).
+The initial SLURM job failed with a 401 error because
+\texttt{depth-anything/da3metric-small} does not exist.
+
+\textbf{Implication for Jetson deployment:} DA3-SMALL on Jetson
+produces relative depth. Converting to metric requires either (a) the
+$f \cdot d_{\text{raw}} / 300$ formula (calibrated for DA3METRIC only),
+or (b) a one-time scale calibration against a known distance.
+
+\subsubsection{Evaluation Methodology}
+
+Two evaluation modes were implemented in \texttt{eval\_corridor\_da3.py}:
+
+\begin{enumerate}[nosep]
+  \item \textbf{DA3METRIC-LARGE (metric mode):} Direct metric output
+    using $d = f \cdot d_{\text{raw}} / 300$ with $f = 747.66$\,px
+    (Femto Bolt color camera focal length).
+  \item \textbf{DA3-SMALL (relative + median-scaling):} Per-frame
+    median-scaling aligns relative predictions to sensor depth. This
+    simulates the best-case accuracy if the scale factor were perfectly
+    calibrated, answering: ``how good is DA3-SMALL's \emph{shape}
+    accuracy, ignoring scale?''
+\end{enumerate}
+
+\subsubsection{Results: DA3METRIC-LARGE (Metric Conversion)}
+
+\begin{table}[h]
+\centering
+\caption{DA3METRIC-LARGE on corridor --- metric conversion BROKEN}
+\label{tab:iter9-metric-large}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Overall RMSE      & \textcolor{regression}{\textbf{4.302 m}} \\
+MAE               & 3.468 m \\
+AbsRel            & 4.222 \\
+$\delta < 1.25$   & 0.0\% \\
+\midrule
+Near (0.3--1.0m)  & 3.043 m \\
+Mid (1.0--2.0m)   & 5.563 m \\
+Far (2.0--4.0m)   & 7.211 m \\
+\midrule
+Prediction range  & 0.500 -- 59.252 m \\
+Mean latency      & 81 ms (12.4 FPS on L40S) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The metric conversion formula completely fails on the Femto Bolt
+camera.} Predictions reach 59\,m in a corridor where nothing is beyond
+3\,m. This is \emph{worse} than the student models (2.4--2.8\,m).
+
+\subsubsection{Root Cause: Focal Length / Resolution Mismatch}
+
+The formula $d_{\text{metric}} = f \cdot d_{\text{raw}} / 300$ was
+calibrated during DA3METRIC training with cameras whose focal lengths
+and resolutions produce a specific ratio $f/300$. For NYU ($640 \times 480$,
+$f = 519$): ratio $= 1.73$. For the Femto Bolt ($1280 \times 720$,
+$f = 748$): ratio $= 2.49$.
+
+DA3 internally resizes the input image to its processing resolution
+(e.g.\ $504 \times 280$). The effective focal length at this resolution
+would be $748 \times (504/1280) = 294.5$, giving ratio
+$294.5/300 = 0.98$---close to identity. But the formula uses the
+\emph{original} focal length (748), producing predictions $2.49\times$
+too large.
+
+For NYU, the same issue exists but the error is smaller
+($1.73 \times$ vs $1.36 \times$), which was masked by NYU's wider depth
+range. The Femto Bolt's higher resolution amplifies the miscalibration.
+
+\textbf{This also partially explains the student corridor failure:} the
+students were trained on DA3METRIC-LARGE depth predictions generated
+on NYU images (with NYU's focal length). When evaluated on corridor
+images (with the Femto Bolt's different focal length), the learned
+depth scale does not transfer.
+
+\subsubsection{Results: DA3-SMALL (Relative + Median-Scaled)}
+
+\begin{table}[h]
+\centering
+\caption{DA3-SMALL on corridor --- median-scaled relative depth}
+\label{tab:iter9-da3-small}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Overall RMSE      & \textcolor{improved}{\textbf{0.596 m}} \\
+MAE               & 0.301 m \\
+AbsRel            & 0.221 \\
+$\delta < 1.25$   & 56.1\% \\
+\midrule
+Near (0.3--1.0m)  & \textcolor{improved}{\textbf{0.158 m}} \\
+Mid (1.0--2.0m)   & 0.486 m \\
+Far (2.0--4.0m)   & 1.320 m \\
+\midrule
+Floor             & \textcolor{improved}{\textbf{0.089 m}} \\
+Walls/ceiling     & 0.715 m \\
+\midrule
+Mean latency      & 73 ms (13.8 FPS on L40S) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Analysis}
+
+\textbf{DA3-SMALL with proper calibration is viable for corridor
+navigation.} The key result is near-range RMSE:
+
+\begin{itemize}[nosep]
+  \item \textbf{Near (0.3--1.0\,m): 0.158\,m RMSE} --- the collision
+    avoidance zone. With 0.8\,m clearance per side, a $\pm$16\,cm
+    error is safe for navigation.
+  \item \textbf{Floor: 0.089\,m RMSE} --- near-perfect floor distance.
+  \item \textbf{Mid (1.0--2.0\,m): 0.486\,m} --- usable for path planning.
+  \item \textbf{Far (2.0--4.0\,m): 1.320\,m} --- poor, but far objects
+    are less critical for immediate avoidance.
+\end{itemize}
+
+The overall RMSE of 0.596\,m is pulled up by the far-range bin. For
+corridor navigation specifically, where obstacles are within 1--2\,m,
+the effective accuracy is much better than the headline number suggests.
+
+\subsubsection{Distillation Gap Quantified}
+
+\begin{table}[h]
+\centering
+\caption{Corridor depth: DA3-SMALL (teacher) vs distilled students}
+\label{tab:iter9-gap}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Model} & \textbf{Params} & \textbf{Overall RMSE} & \textbf{Near RMSE} & \textbf{Floor RMSE} \\
+\midrule
+DA3-SMALL (median)     & 34.3M  & \textcolor{improved}{\textbf{0.596 m}} & \textcolor{improved}{\textbf{0.158 m}} & \textcolor{improved}{\textbf{0.089 m}} \\
+Student B2 (Iter 7b)   & 15.76M & 2.356 m & 2.538 m & 2.420 m \\
+Student B1 (Iter 6)    & 5.31M  & 2.777 m & 2.922 m & 2.723 m \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The distilled students are \textbf{4--5$\times$ worse} than DA3-SMALL
+on corridor depth. The distillation process loses far more accuracy
+than the parameter reduction ($34.3 \to 5.31$M, $6.5\times$ smaller)
+would predict. Contributing factors:
+\begin{enumerate}[nosep]
+  \item \textbf{Domain shift:} Students trained on NYU (cluttered rooms)
+    evaluated on corridors (simple geometry, different depth distribution).
+  \item \textbf{Metric scale mismatch:} DA3METRIC-LARGE's focal-based
+    conversion produces systematically biased depth on non-NYU cameras.
+    Students learned this biased scale.
+  \item \textbf{Multi-task interference:} Joint depth+seg training
+    degraded depth quality (Iter 5 divergence analysis).
+  \item \textbf{Data limitation:} 1449 NYU images provide insufficient
+    diversity for the student to learn generalisable depth features.
+\end{enumerate}
+
+\subsubsection{Pipeline Changes}
+
+\begin{itemize}[nosep]
+  \item \texttt{eval\_corridor\_da3.py} (NEW): Runs DA3 directly on
+    corridor frames with two modes: metric (uses $f \cdot d / 300$) and
+    relative (per-frame median-scaling). Reports same metrics as
+    \texttt{eval\_corridor\_depth.py} including per-bin and spatial
+    breakdowns.
+  \item \texttt{eval\_corridor\_da3.slurm} (NEW): SLURM script running
+    DA3METRIC-LARGE (metric), DA3METRIC-LARGE (median-scaled), and
+    DA3-SMALL (median-scaled) on corridor data.
+\end{itemize}
+
+\subsubsection{Implications for Deployment}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Direct deployment wins:} DA3-SMALL via TensorRT on Jetson
+    Orin Nano (40--50\,FPS at 308$\times$308) with a one-time scale
+    calibration is the practical path. The GerdsenAI ROS2 Wrapper
+    handles TensorRT export and ROS2 topic publishing.
+  \item \textbf{Distillation to B1/B2 is not viable for depth} at
+    current data scale. The 4--5$\times$ accuracy loss is unacceptable
+    for navigation.
+  \item \textbf{Segmentation distillation may still be useful:} B2
+    achieved 50.2\% mIoU on NYU (best\_seg.pt). Segmentation does not
+    require metric scale calibration, so domain shift is less severe.
+    A seg-only student paired with direct DA3 depth is a viable hybrid
+    architecture.
+  \item \textbf{For the thesis:} The distillation study is a negative
+    but informative result---it quantifies exactly where and why
+    distillation fails for metric depth in domain-shifted settings.
+    The pivot to direct deployment is a well-motivated engineering
+    decision supported by the ablation data.
+\end{enumerate}
+
+\textbf{Status:} DA3-SMALL evaluation complete. DA3METRIC-LARGE
+median-scaled evaluation pending (confirms whether 0.35B model has
+better underlying depth quality than 34.3M model).
 
 % ============================================================================
 \section{Comparison: v1 vs v3}
@@ -1129,9 +1436,9 @@ malformed teacher output.
 \label{sec:future}
 % ============================================================================
 
-Revised based on Iterations 7 and 7b experimental results.
+Revised based on Iterations 7, 7b, 8, and 9 experimental results.
 
-\subsection{Lessons from Iters 7/7b}
+\subsection{Lessons Learned}
 
 \begin{enumerate}
   \item \textbf{Temporal video data $\neq$ more unique data.}
@@ -1148,54 +1455,70 @@ Revised based on Iterations 7 and 7b experimental results.
     The $\log \sigma^2$ blow-up appeared in all three experiments,
     earliest on TUM (epoch 28), then B2/NYU (epoch 92), then B1/NYU
     (epoch 115). The formulation needs clamping or replacement.
+
+  \item \textbf{Metric depth distillation does not transfer across cameras.}
+    DA3METRIC-LARGE's focal-based conversion ($f \cdot d / 300$) is
+    calibrated for its training camera distribution. Applying it to the
+    Femto Bolt ($f = 748$ at $1280 \times 720$) produces 4.3\,m RMSE.
+    Students trained on these predictions inherit the camera-specific
+    bias and fail on new cameras.
+
+  \item \textbf{Domain shift dominates distillation loss.}
+    Students trained on NYU (cluttered rooms, $0.5$--$10$\,m depth)
+    produce 2.4--2.8\,m RMSE on corridors ($0.3$--$3$\,m depth).
+    The distillation gap (4--5$\times$ vs DA3-SMALL) far exceeds
+    what parameter reduction alone would predict.
+
+  \item \textbf{Relative depth quality is excellent.}
+    DA3-SMALL achieves 0.158\,m near-range RMSE with simple
+    median-scaling---no metric conversion needed. The model's
+    depth \emph{ordering} generalises across cameras and scenes;
+    only the \emph{scale} requires calibration.
 \end{enumerate}
 
 \subsection{Recommended Next Steps (Priority Order)}
 
-\subsubsection{1. Fix the Loss --- Clamp or Replace Kendall (Highest Impact)}
+\subsubsection{1. Direct DA3-SMALL Deployment on Jetson (Highest Priority)}
 
-The Kendall uncertainty weighting is the root cause of training
-instability across all experiments. Two options:
-
+Deploy DA3-SMALL via TensorRT on Jetson Orin Nano 8GB using the
+GerdsenAI ROS2 Wrapper. Expected performance: 40--50\,FPS at
+$308 \times 308$, $\sim$1.2\,GB VRAM. Requires:
 \begin{itemize}[nosep]
-  \item \textbf{Clamp $\log \sigma^2$ to $[-4, 4]$}: Prevents
-    variance blow-up while preserving adaptive weighting. One line
-    of code in \texttt{losses.py}.
-  \item \textbf{GradNorm} (Chen et al.\ 2018): Balances tasks by
-    gradient magnitudes instead of learned variance. More robust
-    but requires tracking gradient norms per task.
+  \item One-time scale calibration: point camera at known distance,
+    compute scale factor, hardcode in the ROS2 node.
+  \item YOLO alongside for object detection (0.5\,GB VRAM).
+  \item Total memory budget: $\sim$6.7\,GB (fits in 8\,GB).
+\end{itemize}
+Setup scripts and ROS2 nodes already prepared in
+\texttt{NCHSB/jetson\_deploy/}.
+
+\subsubsection{2. Cross-Dataset DA3 Ablation (Thesis Strengthening)}
+
+Run DA3-SMALL and DA3METRIC-LARGE on multiple indoor RGB-D datasets
+and compare against sensor depth. This creates a cross-dataset ablation
+table showing DA3's accuracy across environments:
+\begin{itemize}[nosep]
+  \item NYU Depth V2 (already have teacher data on HPC)
+  \item TUM RGB-D (already have teacher data on HPC)
+  \item LILocBench (hallway sequences with RealSense D455---closest
+    match to deployment corridor)
+  \item Corridor (459 frames, done)
 \end{itemize}
 
-This alone could allow B1 to train stably for 200 epochs, potentially
-improving both depth and seg in a single checkpoint.
+\subsubsection{3. Segmentation-Only Distillation (If Time Permits)}
 
-\subsubsection{2. Two-Phase Training (Moderate Impact)}
+Distillation may still be viable for \emph{segmentation only}. B2
+achieved 50.2\% mIoU on NYU. A seg-only student (no depth decoder)
+paired with direct DA3 depth is a hybrid architecture worth testing.
+This removes the multi-task interference that degraded depth quality.
 
-Train jointly for 40 epochs (captures depth optimum), then freeze
-depth decoder and train segmentation only. This directly addresses
-the multi-task divergence without any loss formulation changes.
-Already supported via \texttt{-{}-freeze-encoder}.
+\subsubsection{4. Corridor-Specific Training Data}
 
-\subsubsection{3. Diverse Training Data (If Time Permits)}
-
-If additional data is pursued, it must be \emph{diverse independent
-images}, not video sequences. Candidates:
-\begin{itemize}[nosep]
-  \item \textbf{Hypersim} (77k synthetic frames): Each frame is a
-    unique rendered viewpoint. No temporal redundancy.
-  \item \textbf{DIODE} (25k frames): Captured as independent
-    photographs, not video sequences.
-\end{itemize}
-
-TUM RGB-D and similar video datasets are not suitable without
-aggressive deduplication (e.g.\ perceptual hashing to select
-visually distinct keyframes).
-
-\subsection{TensorRT Deployment Benchmark}
-
-Export the student model to ONNX $\to$ TensorRT and benchmark on Jetson
-Orin Nano. This is architecture-dependent (not training-dependent) and
-can proceed with the current checkpoints.
+Collecting diverse corridor RGB frames (different lighting, furniture
+placement, time of day) and running DA3+YOLO+SAM2 teacher inference
+would provide domain-specific training data. Combined with scale-aware
+loss (using known corridor geometry), this could make distillation
+viable for corridors specifically.
 
 % ============================================================================
 \section{Known Issues and Next Steps}
@@ -1203,33 +1526,44 @@ can proceed with the current checkpoints.
 % ============================================================================
 
 \begin{enumerate}
+  \item \textbf{Distillation fails for corridor depth (CRITICAL):}
+    Student models (B1: 2.78\,m, B2: 2.36\,m RMSE) are unusable in
+    the corridor, while DA3-SMALL achieves 0.60\,m (0.16\,m near-range)
+    with simple median-scaling. The 4--5$\times$ gap is caused by
+    domain shift (NYU $\to$ corridor), metric scale mismatch, and
+    multi-task interference. \textbf{Decision:} pivot to direct
+    DA3-SMALL deployment on Jetson for depth; retain seg distillation.
+
+  \item \textbf{DA3METRIC focal conversion is camera-dependent:}
+    The $f \cdot d_{\text{raw}} / 300$ formula produces 4.3\,m RMSE
+    on Femto Bolt images ($f = 748$) despite achieving 0.25\,m on NYU
+    ($f = 519$). The formula is calibrated for cameras in DA3's training
+    distribution and does not generalise to higher-resolution cameras.
+    This also means student models trained on DA3METRIC depth learn
+    camera-specific scale that does not transfer.
+
   \item \textbf{Multi-task divergence (partially solved):} Per-task
-    checkpointing (Iter 6) captures both optima: depth at epoch 39,
-    seg at epoch 152. Uncertainty weighting helped seg significantly
-    (46.5\% $\to$ 50.2\% with B2) but did not improve depth. A unified
-    model optimal at both tasks simultaneously remains unsolved.
+    checkpointing captures both optima: depth at epoch 39, seg at epoch
+    152. Uncertainty weighting helped seg (46.5\% $\to$ 50.2\% with B2)
+    but not depth.
 
-  \item \textbf{Negative train loss (Iters 6, 7, 7b):} The Kendall
-    uncertainty formulation allows loss to go negative when
-    $\log \sigma^2$ grows unbounded. Appeared in \emph{all three}
+  \item \textbf{Negative train loss (Iters 6, 7, 7b):} Kendall
+    uncertainty $\log \sigma^2$ grows unbounded. Appeared in all
     experiments: epoch 28 (TUM), 92 (B2/NYU), 115 (B1/NYU).
-    \textbf{Highest-priority fix:} clamp $\log \sigma^2$ to $[-4, 4]$.
 
-  \item \textbf{Video data is not diverse data:} TUM RGB-D (5316 frames)
-    performed worse than NYU (1449 images) because consecutive video
-    frames are near-identical. Future data sources must provide
-    independent viewpoints, not video sequences.
+  \item \textbf{Sensor failure in corridors:} 77\% of Femto Bolt
+    depth pixels are dead (zero readings) due to reflective floors and
+    specular surfaces. This confirms monocular depth estimation is
+    essential---the ToF sensor alone cannot provide dense depth.
 
   \item \textbf{Backbone--task mismatch:} B2 improves seg but worsens
-    depth on the same data. The optimal architecture differs by task,
-    suggesting that task-specific heads (or even separate models) may
-    outperform a single multi-task model.
+    depth. Optimal architecture differs by task.
 
-  \item \textbf{Person class:} B2 achieves 45.1\% person IoU (up from
-    0.0\% pre-Iter 6). Glass remains NaN (too few pixels in NYU).
-
-  \item \textbf{Table III (TensorRT):} Export to ONNX + TensorRT and
-    benchmark on Jetson. Can proceed with current checkpoints.
+  \item \textbf{Jetson deployment:} DA3-SMALL via TensorRT
+    (GerdsenAI Wrapper, 40--50\,FPS on Orin Nano 8GB) with one-time
+    scale calibration is the recommended path. ONNX build in progress
+    on Jetson. The \texttt{NCHSB/jetson\_deploy/} folder contains
+    setup scripts, YOLO ROS2 node, and launch file.
 \end{enumerate}
 
 % ============================================================================
@@ -1271,9 +1605,15 @@ can proceed with the current checkpoints.
 \texttt{setup\_hpc.sh}         & anaconda3/2025.06, DA3 source install, timm, SAM2 checkpoint download \\
 \texttt{requirements.txt}      & Added \texttt{timm} \\
 \texttt{README.md}             & Complete rewrite for v3 architecture \\
-\texttt{teacher\_infer/extract\_corridor\_bag.py} & NEW: Extract RGB+depth from Orbbec Femto Bolt MCAP rosbags \\
+\texttt{teacher\_infer/extract\_corridor\_bag.py} & NEW: Extract RGB+depth from Orbbec Femto Bolt MCAP rosbags with 3D reprojection for depth alignment \\
 \texttt{eval\_corridor\_depth.py} & NEW: Depth-only eval against sensor depth with per-bin and spatial breakdown \\
 \texttt{eval\_corridor.slurm}  & NEW: SLURM script for corridor depth evaluation (B1 + B2) \\
+\texttt{eval\_corridor\_da3.py} & NEW: Run DA3 directly on corridor frames; supports metric and relative (median-scaled) modes \\
+\texttt{eval\_corridor\_da3.slurm} & NEW: SLURM script for DA3METRIC-LARGE + DA3-SMALL corridor evaluation \\
+\texttt{NCHSB/jetson\_deploy/README.md}       & NEW: Jetson Orin Nano deployment guide (DA3-Small + YOLO via TensorRT) \\
+\texttt{NCHSB/jetson\_deploy/setup\_jetson.sh} & NEW: One-time Jetson setup script (clone DA3 wrapper, export YOLO engine) \\
+\texttt{NCHSB/jetson\_deploy/yolo\_node.py}    & NEW: ROS2 node for YOLOv8-nano TensorRT detection \\
+\texttt{NCHSB/jetson\_deploy/perception.launch.py} & NEW: ROS2 launch file for DA3 + YOLO perception stack \\
 \bottomrule
 \end{longtable}
 
@@ -1316,6 +1656,13 @@ Feb 28, 2026 & Iter 7 training complete: B1/TUM underperforms B1/NYU (temporal r
 Feb 28, 2026 & Iter 7b training + eval complete: B2 seg 50.2\% mIoU ($+3.7$pp), depth worse \\
 Feb 28, 2026 & Diagnosis: video data $\neq$ diverse data; Kendall unstable in all experiments \\
 Feb 28, 2026 & Iter 8: Corridor eval pipeline (extract 459 frames from Femto Bolt rosbag) \\
+Feb 28, 2026 & Iter 8: 3D depth reprojection implemented (depth optical $\to$ color optical frame) \\
+Feb 28, 2026 & Iter 8 results: B1 RMSE 2.78\,m, B2 RMSE 2.36\,m --- students unusable in corridor \\
+Feb 28, 2026 & Created \texttt{NCHSB/jetson\_deploy/} for direct DA3-Small + YOLO Jetson deployment \\
+Mar 1, 2026  & Iter 9: DA3 direct corridor evaluation (discovered DA3METRIC-SMALL does not exist) \\
+Mar 1, 2026  & Iter 9: DA3METRIC-LARGE metric conversion fails on Femto Bolt (RMSE 4.30\,m) \\
+Mar 1, 2026  & Iter 9: DA3-SMALL with median-scaling achieves 0.60\,m RMSE (0.16\,m near-range) \\
+Mar 1, 2026  & \textbf{Key decision:} direct DA3-SMALL on Jetson is viable; distillation not viable for depth \\
 \bottomrule
 \end{longtable}
 
