@@ -1232,6 +1232,41 @@ on NYU images (with NYU's focal length). When evaluated on corridor
 images (with the Femto Bolt's different focal length), the learned
 depth scale does not transfer.
 
+\subsubsection{Results: DA3METRIC-LARGE (Median-Scaled)}
+
+Running DA3METRIC-LARGE in median-scaled mode bypasses the broken
+focal conversion and isolates the model's underlying depth quality.
+
+\begin{table}[h]
+\centering
+\caption{DA3METRIC-LARGE on corridor --- median-scaled (bypassing focal conversion)}
+\label{tab:iter9-metric-large-median}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Overall RMSE      & \textcolor{improved}{\textbf{0.586 m}} \\
+MAE               & 0.293 m \\
+AbsRel            & 0.218 \\
+$\delta < 1.25$   & 60.0\% \\
+\midrule
+Near (0.3--1.0m)  & 0.192 m \\
+Mid (1.0--2.0m)   & 0.561 m \\
+Far (2.0--4.0m)   & 1.282 m \\
+\midrule
+Floor             & \textcolor{improved}{\textbf{0.082 m}} \\
+Walls/ceiling     & 0.703 m \\
+\midrule
+Mean latency      & 91 ms (11.0 FPS on L40S) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{This confirms the issue is purely the focal conversion.}
+DA3METRIC-LARGE achieves 0.586\,m RMSE with median-scaling---nearly
+identical to DA3-SMALL's 0.596\,m. The 0.35B model's underlying depth
+quality is no better than the 34.3M model's in this corridor environment.
+
 \subsubsection{Results: DA3-SMALL (Relative + Median-Scaled)}
 
 \begin{table}[h]
@@ -1242,7 +1277,7 @@ depth scale does not transfer.
 \toprule
 \textbf{Metric} & \textbf{Value} \\
 \midrule
-Overall RMSE      & \textcolor{improved}{\textbf{0.596 m}} \\
+Overall RMSE      & 0.596 m \\
 MAE               & 0.301 m \\
 AbsRel            & 0.221 \\
 $\delta < 1.25$   & 56.1\% \\
@@ -1251,7 +1286,7 @@ Near (0.3--1.0m)  & \textcolor{improved}{\textbf{0.158 m}} \\
 Mid (1.0--2.0m)   & 0.486 m \\
 Far (2.0--4.0m)   & 1.320 m \\
 \midrule
-Floor             & \textcolor{improved}{\textbf{0.089 m}} \\
+Floor             & 0.089 m \\
 Walls/ceiling     & 0.715 m \\
 \midrule
 Mean latency      & 73 ms (13.8 FPS on L40S) \\
@@ -1259,38 +1294,73 @@ Mean latency      & 73 ms (13.8 FPS on L40S) \\
 \end{tabular}
 \end{table}
 
-\subsubsection{Analysis}
+\subsubsection{Comparative Analysis: All Three Modes}
 
-\textbf{DA3-SMALL with proper calibration is viable for corridor
-navigation.} The key result is near-range RMSE:
+\begin{table}[h]
+\centering
+\caption{DA3 corridor evaluation: all three configurations}
+\label{tab:iter9-all}
+\begin{tabular}{llrrrrrr}
+\toprule
+\textbf{Model} & \textbf{Mode} & \textbf{RMSE} & \textbf{Near} & \textbf{Mid} & \textbf{Far} & \textbf{Floor} & \textbf{$\delta$\textless 1.25} \\
+\midrule
+DA3METRIC-LARGE & Metric    & \textcolor{regression}{4.302} & 3.043 & 5.563 & 7.211 & 1.656 & 0.0\% \\
+DA3METRIC-LARGE & Median    & \textcolor{improved}{0.586}  & 0.192 & 0.561 & 1.282 & 0.082 & 60.0\% \\
+DA3-SMALL       & Median    & 0.596 & \textcolor{improved}{0.158} & \textcolor{improved}{0.486} & 1.320 & 0.089 & 56.1\% \\
+\midrule
+Student B2      & ---       & 2.356 & 2.538 & 2.379 & 1.233 & 2.420 & 5.1\% \\
+Student B1      & ---       & 2.777 & 2.922 & 2.936 & 1.982 & 2.723 & 2.3\% \\
+\bottomrule
+\multicolumn{8}{l}{\footnotesize All RMSE values in metres. Near = 0.3--1.0\,m, Mid = 1.0--2.0\,m, Far = 2.0--4.0\,m.}
+\end{tabular}
+\end{table}
 
-\begin{itemize}[nosep]
-  \item \textbf{Near (0.3--1.0\,m): 0.158\,m RMSE} --- the collision
-    avoidance zone. With 0.8\,m clearance per side, a $\pm$16\,cm
-    error is safe for navigation.
-  \item \textbf{Floor: 0.089\,m RMSE} --- near-perfect floor distance.
-  \item \textbf{Mid (1.0--2.0\,m): 0.486\,m} --- usable for path planning.
-  \item \textbf{Far (2.0--4.0\,m): 1.320\,m} --- poor, but far objects
-    are less critical for immediate avoidance.
-\end{itemize}
+\textbf{Key observations:}
 
-The overall RMSE of 0.596\,m is pulled up by the far-range bin. For
-corridor navigation specifically, where obstacles are within 1--2\,m,
-the effective accuracy is much better than the headline number suggests.
+\begin{enumerate}[nosep]
+  \item \textbf{Focal conversion is the sole cause of DA3METRIC-LARGE's
+    failure.} Median-scaling reduces RMSE from 4.30\,m to 0.59\,m ---
+    a $7.3\times$ improvement --- by simply bypassing the
+    $f \cdot d / 300$ formula.
+
+  \item \textbf{DA3-SMALL matches DA3METRIC-LARGE when scale is removed.}
+    Overall RMSE: 0.596 vs 0.586\,m. The 10$\times$ parameter
+    difference (34.3M vs 350M) provides negligible benefit in this
+    geometrically simple corridor. DA3-SMALL is the correct choice
+    for Jetson deployment.
+
+  \item \textbf{DA3-SMALL is slightly better at near-range.}
+    Near RMSE: 0.158\,m (SMALL) vs 0.192\,m (LARGE). The smaller
+    model edges out the larger one in the collision avoidance zone.
+
+  \item \textbf{DA3METRIC-LARGE wins on floor and $\delta < 1.25$.}
+    Floor: 0.082 vs 0.089\,m. $\delta < 1.25$: 60.0\% vs 56.1\%.
+    Marginal improvements from the larger model.
+
+  \item \textbf{Both DA3 models are $\sim$4--5$\times$ better than
+    distilled students.} The distillation gap is dominated by domain
+    shift and metric scale mismatch, not model capacity.
+\end{enumerate}
+
+\textbf{Navigation viability:} With 0.8\,m clearance per side, the
+near-range accuracy of both DA3 models ($\pm$16--19\,cm) is safe for
+corridor obstacle avoidance. DA3-SMALL with one-time calibration on
+the Jetson is the recommended deployment path.
 
 \subsubsection{Distillation Gap Quantified}
 
 \begin{table}[h]
 \centering
-\caption{Corridor depth: DA3-SMALL (teacher) vs distilled students}
+\caption{Corridor depth: DA3 teachers vs distilled students}
 \label{tab:iter9-gap}
 \begin{tabular}{lrrrr}
 \toprule
 \textbf{Model} & \textbf{Params} & \textbf{Overall RMSE} & \textbf{Near RMSE} & \textbf{Floor RMSE} \\
 \midrule
-DA3-SMALL (median)     & 34.3M  & \textcolor{improved}{\textbf{0.596 m}} & \textcolor{improved}{\textbf{0.158 m}} & \textcolor{improved}{\textbf{0.089 m}} \\
-Student B2 (Iter 7b)   & 15.76M & 2.356 m & 2.538 m & 2.420 m \\
-Student B1 (Iter 6)    & 5.31M  & 2.777 m & 2.922 m & 2.723 m \\
+DA3METRIC-LARGE (median) & 350M   & \textcolor{improved}{\textbf{0.586 m}} & 0.192 m & \textcolor{improved}{\textbf{0.082 m}} \\
+DA3-SMALL (median)       & 34.3M  & 0.596 m & \textcolor{improved}{\textbf{0.158 m}} & 0.089 m \\
+Student B2 (Iter 7b)     & 15.76M & 2.356 m & 2.538 m & 2.420 m \\
+Student B1 (Iter 6)      & 5.31M  & 2.777 m & 2.922 m & 2.723 m \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1346,9 +1416,10 @@ would predict. Contributing factors:
     decision supported by the ablation data.
 \end{enumerate}
 
-\textbf{Status:} DA3-SMALL evaluation complete. DA3METRIC-LARGE
-median-scaled evaluation pending (confirms whether 0.35B model has
-better underlying depth quality than 34.3M model).
+\textbf{Status:} All three evaluations complete. DA3METRIC-LARGE
+median-scaled confirms the issue is purely the focal conversion
+(0.586\,m RMSE, matching DA3-SMALL). Direct DA3-SMALL deployment
+on Jetson is the recommended path forward for depth estimation.
 
 % ============================================================================
 \section{Comparison: v1 vs v3}
