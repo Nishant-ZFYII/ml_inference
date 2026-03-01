@@ -41,11 +41,18 @@ def load_model(checkpoint_path: str, device: torch.device, cfg):
                           backbone=cfg.BACKBONE)
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if "model" in ckpt:
-        model.load_state_dict(ckpt["model"])
+        state = ckpt["model"]
     elif "model_state_dict" in ckpt:
-        model.load_state_dict(ckpt["model_state_dict"])
+        state = ckpt["model_state_dict"]
     else:
-        model.load_state_dict(ckpt)
+        state = ckpt
+
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"  [WARN] Missing keys (model lacks these): {missing}")
+    if unexpected:
+        print(f"  [INFO] Unexpected keys (checkpoint extras, ignored): "
+              f"{[k for k in unexpected]}")
     model.to(device)
     model.eval()
     return model
