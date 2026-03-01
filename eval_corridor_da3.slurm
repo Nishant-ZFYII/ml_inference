@@ -51,9 +51,19 @@ python eval_corridor_da3.py \
     --manifest "$MANIFEST"
 echo ""
 
+# ── DA3METRIC-LARGE (median-scaled — test if underlying depth is good) ─────
+# The focal/300 metric conversion broke for Femto Bolt (748px focal).
+# Median-scaling bypasses the conversion to isolate depth quality.
+echo "=========================================="
+echo "=== DA3METRIC-LARGE (median-scaled, bypass focal conversion) ==="
+echo "=========================================="
+python eval_corridor_da3.py \
+    --model-id depth-anything/DA3METRIC-LARGE \
+    --relative \
+    --manifest "$MANIFEST"
+echo ""
+
 # ── DA3-SMALL (Jetson candidate — relative depth, median-scaled) ──────────
-# DA3-SMALL outputs relative depth only. We median-scale each frame to
-# show best-case accuracy if properly calibrated on the Jetson.
 echo "=========================================="
 echo "=== DA3-SMALL (Jetson candidate, median-scaled) ==="
 echo "=========================================="
