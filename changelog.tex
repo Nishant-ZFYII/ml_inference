@@ -1734,6 +1734,9 @@ Mar 1, 2026  & Iter 9: DA3 direct corridor evaluation (discovered DA3METRIC-SMAL
 Mar 1, 2026  & Iter 9: DA3METRIC-LARGE metric conversion fails on Femto Bolt (RMSE 4.30\,m) \\
 Mar 1, 2026  & Iter 9: DA3-SMALL with median-scaling achieves 0.60\,m RMSE (0.16\,m near-range) \\
 Mar 1, 2026  & \textbf{Key decision:} direct DA3-SMALL on Jetson is viable; distillation not viable for depth \\
+Mar 2, 2026  & V5 corridor evaluation: RMSE 2.186\,m ($+59\%$ regression vs V4's 1.373\,m) \\
+Mar 2, 2026  & \textbf{Key finding:} deployment augmentations improve NYU accuracy but worsen corridor transfer \\
+Mar 2, 2026  & V4 confirmed as best corridor student; LILocBench data pipeline in preparation \\
 \bottomrule
 \end{longtable}
 
@@ -2515,24 +2518,157 @@ No post-hoc rescaling is needed for deployment.
 \end{longtable}
 
 % ----------------------------------------------------------------------------
+\subsection{V5 Corridor Evaluation (Iteration 11)}
+\label{sec:vivek-v5-corridor}
+% ----------------------------------------------------------------------------
+
+V5 achieves 0.572\,m RMSE on NYU---a 26\% improvement over V4 (0.774\,m).
+The critical question: do deployment augmentations (rotation, blur, noise,
+JPEG, cutout) improve \emph{corridor} performance, or do they only help
+within the NYU domain?
+
+\subsubsection{Methodology}
+
+V5 \texttt{best\_depth.pt} (epoch 166) was evaluated on the same 459 corridor
+frames from the Femto Bolt rosbag used in Iterations 8 and 10
+(Section~\ref{sec:vivek-corridor}). Same pipeline:
+\texttt{eval\_corridor\_depth.py -{}-imagenet-norm -{}-checkpoint
+\$SCRATCH/checkpoints\_v5/best\_depth\_v5\_vivek.pt}.
+
+\subsubsection{Results}
+
+\begin{longtable}{lrrrr}
+\toprule
+\textbf{Region} & \textbf{RMSE (m)} & \textbf{MAE (m)} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Region} & \textbf{RMSE (m)} & \textbf{MAE (m)} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endhead
+\multicolumn{5}{l}{\textbf{V5 best\_depth.pt (deployment augmentations)}} \\
+\midrule
+All valid          & \textcolor{regression}{2.186} & 2.086 & 3.729 &  3.8\% \\
+Near (0.3--1.0\,m) & 2.361 & 2.302 & 4.707 &  0.0\% \\
+Mid (1.0--2.0\,m)  & 2.196 & 2.119 & 1.589 &  0.5\% \\
+Far (2.0--4.0\,m)  & 1.469 & 1.297 & 0.480 & 22.1\% \\
+Top 2/3 (walls)    & 2.255 & 2.126 & 2.806 &  5.5\% \\
+Bottom 1/3 (floor) & 2.025 & 1.997 & 5.785 &  0.0\% \\
+\midrule
+\multicolumn{5}{l}{\textbf{V4 best\_depth.pt (reference, from Iteration~10)}} \\
+\midrule
+All valid          & \textcolor{improved}{\textbf{1.373}} & 1.269 & 2.356 &  8.7\% \\
+Near (0.3--1.0\,m) & 1.434 & 1.390 & 2.920 &  0.0\% \\
+Mid (1.0--2.0\,m)  & 1.180 & 1.030 & 0.785 & 11.7\% \\
+Far (2.0--4.0\,m)  & 1.276 & 0.906 & 0.314 & 53.3\% \\
+Top 2/3 (walls)    & 1.363 & 1.219 & 1.598 & 12.6\% \\
+Bottom 1/3 (floor) & 1.396 & 1.380 & 4.042 &  0.0\% \\
+\bottomrule
+\end{longtable}
+
+\subsubsection{Comparative Analysis: All Models on Corridor Data}
+
+\begin{longtable}{llrrr}
+\toprule
+\textbf{Model} & \textbf{NYU RMSE} & \textbf{Corridor RMSE} & \textbf{NYU$\to$Corr.\ ratio} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endfirsthead
+DA3-SMALL (median)       & $\sim$0.296\,m & \textbf{0.596\,m} & $\sim$2.0$\times$ & 56.1\% \\
+V4 best\_depth           & 0.774\,m       & \textbf{1.373\,m} & $1.77\times$       &  8.7\% \\
+V5 best\_depth           & \textbf{0.572\,m} & 2.186\,m       & $3.82\times$       &  3.8\% \\
+Iter 6 B1                & 0.998\,m       & 2.777\,m          & $2.78\times$       &  2.3\% \\
+\bottomrule
+\end{longtable}
+
+\subsubsection{Analysis: Augmentations Hurt Corridor Transfer}
+
+\textbf{V5 is 59\% worse than V4 on the corridor} (2.186\,m vs 1.373\,m),
+\emph{despite} being 26\% better on NYU (0.572\,m vs 0.774\,m). The
+NYU-to-corridor degradation ratio is the worst of any model tested:
+$3.82\times$ (V5) vs $1.77\times$ (V4) vs $2.78\times$ (Iter~6).
+
+This is a textbook case of \textbf{within-domain vs cross-domain
+generalisation}:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Deployment augmentations help within-domain.}
+    Rotation, blur, noise, JPEG compression, and cutout create varied
+    perturbations of NYU-like scenes. The model learns to be robust to
+    these perturbations, reducing NYU RMSE from 0.774\,m to 0.572\,m.
+    Best depth moved from epoch 45 (V4) to epoch 166 (V5), confirming
+    reduced overfitting.
+
+  \item \textbf{Deployment augmentations hurt cross-domain.}
+    By training for $3.7\times$ more useful epochs on NYU, V5 learned
+    NYU's scene geometry \emph{more deeply}: cluttered rooms, furniture
+    at mid-range, depth distributions centred around 2--3\,m. No amount
+    of adding blur or noise to a bedroom image teaches the model what a
+    long, narrow hallway with parallel walls at 0.5--1.0\,m looks like.
+
+  \item \textbf{V4's ``early stopping'' was accidental regularisation.}
+    V4 peaked at epoch 45 and degraded thereafter---but this early peak
+    meant the model had not yet fully memorised NYU's room geometry. The
+    less-specialised features transferred better to corridors. V5, by
+    contrast, had 166 epochs of learning NYU-specific depth patterns,
+    making it more brittle outside that domain.
+
+  \item \textbf{The core problem remains data distribution.}
+    All photometric augmentations (blur, noise, exposure, JPEG) modify
+    image \emph{appearance} but not scene \emph{geometry}. Corridor depth
+    is fundamentally different from NYU depth: narrow depth range
+    (0.3--2.0\,m vs 0.5--10\,m), parallel walls, long vanishing points,
+    floor-dominant viewpoints. Only \emph{geometric domain adaptation}---
+    training on actual corridor or hallway data---can close this gap.
+\end{enumerate}
+
+\subsubsection{Implications}
+
+\begin{itemize}[nosep]
+  \item \textbf{V4 remains the best student for corridor deployment}
+    (1.373\,m RMSE). Its earlier stopping and less aggressive augmentation
+    produced features that transfer better across domains.
+  \item \textbf{V5 is the best student for NYU-like environments}
+    (0.572\,m RMSE, 63.7\% mIoU). If the deployment environment resembles
+    NYU (cluttered rooms, diverse furniture), V5 is clearly superior.
+  \item \textbf{LILocBench training data is the priority.}
+    The V4 vs V5 result definitively shows that training recipe improvements
+    (augmentations, loss, LR schedules) have diminishing returns for
+    cross-domain transfer. The only path to closing the corridor gap is
+    adding hallway/corridor data to the training set. LILocBench
+    (21 sequences, 3034\,m of indoor robot driving, 3 RealSense D455
+    cameras, hallway-heavy) is the strongest candidate.
+  \item \textbf{DA3-Small remains $3.7\times$ better than any student}
+    on corridor data (0.596\,m vs V4's 1.373\,m). Direct deployment
+    on Jetson via TensorRT continues to be the recommended depth strategy
+    until corridor-specific training data is available.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
 \subsection{Conclusion and Status}
 \label{sec:vivek-conclusion}
 % ----------------------------------------------------------------------------
 
 V5 (EfficientViT-B1 + deployment augmentations) is the \textbf{best result
-across all experiments in this project}:
+on NYU} across all experiments:
 
 \begin{itemize}[nosep]
-  \item \textbf{Depth RMSE:} 0.572\,m (V4: 0.774\,m, Iter 6: 0.998\,m)
+  \item \textbf{NYU Depth RMSE:} 0.572\,m (V4: 0.774\,m, Iter 6: 0.998\,m)
   \item \textbf{Seg mIoU:} 63.7\% (V4: 51.0\%, Iter 7b: 50.2\%)
   \item \textbf{Depth structure:} correlation $r = 0.91$ with NYU GT
   \item \textbf{$\delta < 1.25$:} 80.8\% (first time above 80\%)
   \item \textbf{Calibration:} near-perfect (affine correction $<0.5\%$)
-  \item \textbf{All classes improved:} person $+17$pp, glass $+21$pp,
-    floor 86\%, wall 80\%, furniture 76\%
 \end{itemize}
 
-\textbf{Cumulative improvement from Vivek's experiments:}
+However, \textbf{V4 remains the best student for corridor deployment}:
+
+\begin{itemize}[nosep]
+  \item \textbf{V4 corridor RMSE:} 1.373\,m ($1.77\times$ NYU ratio)
+  \item \textbf{V5 corridor RMSE:} 2.186\,m ($3.82\times$ NYU ratio, $+59\%$ regression)
+  \item Deployment augmentations improve within-domain accuracy but
+    \emph{worsen} cross-domain transfer to corridors
+\end{itemize}
+
+\textbf{Cumulative improvement from Vivek's experiments (NYU):}
 \begin{itemize}[nosep]
   \item V3 (MobileNetV3 + optimisations): RMSE 1.16\,m, mIoU 39.3\%
   \item V4 (EfficientViT-B1 backbone swap): RMSE 0.774\,m ($-33\%$), mIoU 51.0\%
@@ -2540,7 +2676,24 @@ across all experiments in this project}:
   \item \textbf{Total improvement V3$\to$V5: RMSE $-51\%$, mIoU $+24.4$pp}
 \end{itemize}
 
-\textbf{Status:} V5 training and evaluation complete. Model ready for
-ONNX export, TensorRT deployment on Jetson, and corridor fine-tuning.
+\textbf{Key lesson:} Training recipe improvements (augmentations, loss
+functions, LR schedules) have reached diminishing returns for corridor
+transfer. The dominant bottleneck is now \textbf{training data distribution}.
+Adding corridor/hallway data (LILocBench, on-robot collection) is the only
+remaining lever to close the $2.3$--$3.7\times$ gap between student models
+and DA3-Small on corridor depth.
+
+\textbf{Next steps:}
+\begin{enumerate}[nosep]
+  \item Train on NYU + LILocBench hallway data using V4 recipe (not V5
+    augmentations) to test corridor transfer improvement
+  \item DA3-Small direct deployment on Jetson (TensorRT, GerdsenAI wrapper)
+    as the interim depth solution
+  \item Corridor costmap ablation study: sensor depth vs DA3 depth vs
+    student depth for Nav2 local costmap generation
+\end{enumerate}
+
+\textbf{Status:} V5 corridor evaluation complete. V4 confirmed as best
+corridor student. LILocBench data pipeline in preparation.
 
 \end{document}
