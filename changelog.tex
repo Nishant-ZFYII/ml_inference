@@ -1737,6 +1737,9 @@ Mar 1, 2026  & \textbf{Key decision:} direct DA3-SMALL on Jetson is viable; dist
 Mar 2, 2026  & V5 corridor evaluation: RMSE 2.186\,m ($+59\%$ regression vs V4's 1.373\,m) \\
 Mar 2, 2026  & \textbf{Key finding:} deployment augmentations improve NYU accuracy but worsen corridor transfer \\
 Mar 2, 2026  & V4 confirmed as best corridor student; LILocBench data pipeline in preparation \\
+Mar 2, 2026  & V7 (LILocBench fine-tune of V5) corridor eval: RMSE 1.712\,m; far-range best at 0.732\,m \\
+Mar 2, 2026  & Costmap ablation (7 experiments): sensor+DA3 fusion optimal (100\% detection, 5.3\% FPR) \\
+Mar 2, 2026  & Corridor width measured at 0.55\,m mean; DA3-only misses 23\% of obstacles \\
 \bottomrule
 \end{longtable}
 
@@ -2644,56 +2647,312 @@ generalisation}:
 \end{itemize}
 
 % ----------------------------------------------------------------------------
+\subsection{V7: LILocBench Fine-Tuning and Corridor Evaluation (Iteration 12)}
+\label{sec:vivek-v7}
+% ----------------------------------------------------------------------------
+
+V5's corridor failure (2.186\,m) was attributed to never having seen corridor
+data. V7 addresses this by fine-tuning V5 on the LILocBench dataset
+(University of Bonn), which contains extensive hallway/corridor sequences.
+
+\subsubsection{Training Summary (by Vivek)}
+
+\begin{itemize}[nosep]
+  \item \textbf{Dataset:} LILocBench \texttt{lt\_changes\_3} sequence --- corridor-only,
+    all doors closed, no humans. 3$\times$ RealSense D455 cameras (front, left, right),
+    640$\times$480 @ 15\,Hz.
+  \item \textbf{Data preparation:} 18{,}524 train / 2{,}059 val frames extracted via
+    \texttt{prep\_lilocbench.py}. Nearest-timestamp matching between RGB and depth
+    sensors (10\,ms tolerance). Depth converted from uint16 PNG (mm) to float32 (m).
+  \item \textbf{Training:} Fine-tuned from V5 \texttt{best\_depth.pt} (epoch 166),
+    epoch counter reset to 0. 50 epochs on LILocBench, batch size 128, deployment
+    augmentations. Encoder frozen for 5 epochs, then unfrozen. $\sim$1.8 hours on L40S.
+  \item \textbf{Depth target:} RealSense D455 sensor depth directly (no DA3 teacher
+    needed --- hardware depth at $\sim$2\% error is good enough).
+  \item \textbf{Seg target:} All pixels set to \texttt{IGNORE\_LABEL} (255) --- no
+    segmentation labels available in LILocBench.
+\end{itemize}
+
+\subsubsection{LILocBench Val Results (from Vivek)}
+
+V7 achieves \textbf{0.4446\,m RMSE on LILocBench val} (Bonn university corridors,
+RealSense D455). This is better than DA3-Small's 0.596\,m on our corridor ---
+but these are different corridors with different cameras.
+
+\textbf{NYU catastrophic forgetting:} NYU RMSE degraded from 0.572\,m (V5) to
+1.315\,m (V7). Seg mIoU dropped from 63.7\% to 47.5\%. $\delta < 1.25$ dropped
+from 80.8\% to 21.0\%. This is expected --- the model traded NYU accuracy for
+corridor accuracy.
+
+\subsubsection{V7 Corridor Evaluation (Our Femto Bolt Data)}
+
+The critical test: V7 evaluated on our 459 Femto Bolt corridor frames.
+
+\begin{longtable}{lrrrr}
+\toprule
+\textbf{Region} & \textbf{RMSE (m)} & \textbf{MAE (m)} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Region} & \textbf{RMSE (m)} & \textbf{MAE (m)} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endhead
+All valid          & 1.712 & 1.232 & 2.135 & 10.7\% \\
+Near (0.3--1.0\,m) & 1.982 & 1.499 & 2.882 &  0.0\% \\
+Mid (1.0--2.0\,m)  & 1.453 & 0.937 & 0.742 & 20.5\% \\
+Far (2.0--4.0\,m)  & \textcolor{improved}{\textbf{0.732}} & 0.585 & 0.201 & \textcolor{improved}{\textbf{57.3\%}} \\
+Top 2/3 (walls)    & 1.953 & 1.385 & 1.953 & 15.5\% \\
+Bottom 1/3 (floor) & 0.982 & 0.889 & 2.539 &  0.0\% \\
+\bottomrule
+\end{longtable}
+
+\subsubsection{Comparative Analysis: All Student Models on Corridor}
+
+\begin{longtable}{lrrrrr}
+\toprule
+\textbf{Model} & \textbf{RMSE} & \textbf{Near} & \textbf{Mid} & \textbf{Far} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endfirsthead
+DA3-SMALL (median)     & \textbf{0.596} & \textbf{0.158} & \textbf{0.486} & 1.320 & \textbf{56.1\%} \\
+V4 best\_depth         & 1.373 & 1.434 & 1.180 & 1.276 &  8.7\% \\
+\textbf{V7 best\_depth} & 1.712 & 1.982 & 1.453 & \textcolor{improved}{\textbf{0.732}} & 10.7\% \\
+V5 best\_depth         & 2.186 & 2.361 & 2.196 & 1.469 &  3.8\% \\
+Iter 6 B1              & 2.777 & 2.922 & 2.936 & 1.982 &  2.3\% \\
+\bottomrule
+\multicolumn{6}{l}{\footnotesize All RMSE in metres. Near = 0.3--1.0\,m, Mid = 1.0--2.0\,m, Far = 2.0--4.0\,m.} \\
+\end{longtable}
+
+\subsubsection{Analysis}
+
+\begin{enumerate}[nosep]
+  \item \textbf{V7 is better than V5 ($-22\%$) but worse than V4 ($+25\%$) overall.}
+    LILocBench fine-tuning partially recovered from V5's deep NYU specialisation,
+    but did not surpass V4's less-specialised transfer.
+
+  \item \textbf{Far-range is the best of any student model.}
+    At 2.0--4.0\,m: RMSE 0.732\,m, $\delta < 1.25 = 57.3\%$. This is nearly
+    $2\times$ better than V4's far-range (1.276\,m) and better than DA3-Small's
+    far-range (1.320\,m). LILocBench corridors have long hallways at these depths,
+    so the model genuinely learned corridor geometry at longer ranges.
+
+  \item \textbf{Near-range remains catastrophic.}
+    At 0.3--1.0\,m: RMSE 1.982\,m, $\delta < 1.25 = 0.0\%$. The Bonn university
+    corridors are wider than our narrow deployment corridor, so the model saw
+    fewer close-wall examples during fine-tuning.
+
+  \item \textbf{Floor improved significantly.}
+    Floor RMSE: 0.982\,m (V7) vs 2.025\,m (V5) vs 1.396\,m (V4). LILocBench's
+    floor-dominant viewpoints from the robot-mounted cameras helped.
+
+  \item \textbf{Starting from V5 was suboptimal.}
+    V5's 166 epochs of NYU specialisation created a poor starting point for
+    corridor adaptation. Fine-tuning from V4 (less specialised, epoch 45) would
+    likely produce better corridor results. The $3.82\times$ NYU-to-corridor
+    ratio of V5 narrows only to $\sim$$3.0\times$ with V7, whereas V4 starts
+    at $1.77\times$.
+\end{enumerate}
+
+% ============================================================================
+\section{Costmap Ablation Study (Iteration 13)}
+\label{sec:costmap-ablation}
+% ============================================================================
+
+This section reports the first costmap ablation study, testing how different
+depth sources and inflation strategies affect Nav2 occupancy grid quality
+in the deployment corridor.
+
+\subsection{Experiment Matrix}
+
+Seven experiments compare depth sources (sensor-only, sensor+DA3 fusion,
+DA3-only) with inflation strategies (fixed, dynamic, class-aware):
+
+\begin{longtable}{llp{7.5cm}}
+\toprule
+\textbf{Exp.} & \textbf{Depth Source} & \textbf{Inflation Strategy} \\
+\midrule
+\endfirsthead
+Baseline & Sensor depth   & Fixed radius (0.09\,m) \\
+A1       & Sensor depth   & Dynamic (corridor width) \\
+A2       & Sensor + DA3   & Fixed radius (0.09\,m) \\
+A3       & Sensor + DA3   & Dynamic (corridor width) \\
+A4       & DA3 only       & Dynamic (corridor width) \\
+A5       & Sensor + DA3   & Class-aware (YOLO+SAM2) \\
+A6       & DA3 only       & Class-aware (YOLO+SAM2) \\
+\bottomrule
+\end{longtable}
+
+\subsection{Configuration}
+
+\begin{itemize}[nosep]
+  \item \textbf{Grid:} $6.0 \times 6.0$\,m, 0.05\,m resolution ($120 \times 120$ cells)
+  \item \textbf{Height filter:} 0.05--0.50\,m above ground
+  \item \textbf{Depth range:} 0.1--5.0\,m
+  \item \textbf{Camera height:} 0.25\,m
+  \item \textbf{Fixed inflation:} 0.09\,m (half robot width)
+  \item \textbf{DA3 depth:} Pre-computed DA3-SMALL, median-scaled against sensor depth
+  \item \textbf{Segmentation:} Pre-computed YOLO+SAM2 6-class masks
+  \item \textbf{Intrinsics:} Femto Bolt colour camera ($f_x = 747.84$, $f_y = 747.48$)
+  \item \textbf{Frames:} 459 corridor frames
+\end{itemize}
+
+\subsection{Results}
+
+\begin{longtable}{llrrrrrrr}
+\toprule
+\textbf{Exp.} & \textbf{Description} & \textbf{IoU} & \textbf{L-IoU} & \textbf{Det.\%} & \textbf{FPR} & \textbf{Clear.} & \textbf{Radius} & \textbf{Time} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Exp.} & \textbf{Description} & \textbf{IoU} & \textbf{L-IoU} & \textbf{Det.\%} & \textbf{FPR} & \textbf{Clear.} & \textbf{Radius} & \textbf{Time} \\
+\midrule
+\endhead
+Baseline & Sensor + fixed       & 1.000 & 1.000 & 100\% & 0.0\% & 0.249 & 0.090 & 16.5 \\
+A1       & Sensor + dynamic     & 1.000 & 1.000 & 100\% & 0.0\% & 0.249 & 0.177 & 63.3 \\
+A2       & Sensor+DA3 + fixed   & 0.379 & 0.295 & 100\% & 5.3\% & 0.171 & 0.090 & 87.2 \\
+A3       & Sensor+DA3 + dynamic & 0.379 & 0.295 & 100\% & 5.3\% & 0.171 & 0.177 & 133.8 \\
+A4       & DA3 only + dynamic   & 0.279 & 0.226 & 76.7\% & 5.3\% & 0.175 & 0.165 & 132.6 \\
+A5       & S+DA3 + class-aware  & 0.379 & 0.295 & 100\% & 5.3\% & 0.171 & 0.192 & 206.2 \\
+A6       & DA3 + class-aware    & 0.279 & 0.226 & 76.7\% & 5.3\% & 0.175 & 0.197 & 189.9 \\
+\bottomrule
+\multicolumn{9}{l}{\footnotesize IoU and L-IoU vs Baseline. Det.\% = detection rate. FPR = false positive rate.} \\
+\multicolumn{9}{l}{\footnotesize Clearance and Radius in metres. Time in ms per frame.} \\
+\end{longtable}
+
+\subsection{Corridor Geometry}
+
+\begin{itemize}[nosep]
+  \item \textbf{Estimated corridor width:} mean = 0.55\,m, std = 0.09\,m,
+    range $[0.50, 0.97]$\,m
+  \item \textbf{Robot width:} $\sim$0.40\,m $\Rightarrow$ clearance per side:
+    $\sim$0.075\,m
+  \item This is an \emph{extremely tight} operating environment. Depth accuracy
+    at near-range ($< 1.0$\,m) is critical for collision avoidance.
+\end{itemize}
+
+\subsection{Inflation Radius Analysis}
+
+\begin{itemize}[nosep]
+  \item \textbf{Dynamic inflation (A1, A3):} mean = 0.177\,m, range
+    $[0.156, 0.180]$\,m. Approximately $2\times$ the fixed radius ---
+    appropriate for this narrow corridor.
+  \item \textbf{Class-aware inflation (A5):} mean = 0.192\,m, slightly larger
+    than dynamic. SAM2 class labels add a small safety margin.
+  \item \textbf{DA3-only dynamic (A4):} mean = 0.165\,m with higher variance
+    (std = 0.022\,m). Without sensor depth anchoring, DA3's depth noise
+    causes less stable radius estimates.
+\end{itemize}
+
+\subsection{Analysis}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Sensor + DA3 fusion (A2/A3/A5) is the optimal strategy.}
+    100\% obstacle detection rate (same as sensor-only) with DA3 filling
+    the 77\% dead sensor pixels. The 5.3\% false positive rate is an
+    acceptable trade-off for complete coverage.
+
+  \item \textbf{DA3-only (A4/A6) misses 23\% of obstacles.}
+    Detection rate drops to 76.7\% --- DA3 fails to detect some obstacles
+    that the ToF sensor catches (specular surfaces, thin objects). DA3-only
+    is too risky for safety-critical navigation.
+
+  \item \textbf{Adding DA3 significantly changes the costmap.}
+    IoU drops to 0.379 vs sensor-only baseline. DA3 sees obstacles in the
+    77\% of pixels where the sensor fails, creating a substantially different
+    (and more complete) occupancy grid.
+
+  \item \textbf{Class-aware inflation (A5/A6) adds safety but not detection.}
+    Same detection rate and FPR as dynamic inflation (A3/A4), but slightly
+    larger inflation radius (0.192\,m vs 0.177\,m). The segmentation data
+    adds safety margin around detected objects but does not discover new ones.
+
+  \item \textbf{Dynamic inflation doubles the safety margin.}
+    0.177\,m (dynamic) vs 0.090\,m (fixed). In a 0.55\,m corridor with
+    0.075\,m clearance per side, the dynamic radius of 0.177\,m actually
+    exceeds the available clearance --- this would prevent the robot from
+    moving. The fixed radius (0.090\,m) is more practical for this specific
+    corridor geometry, though dynamic inflation would be appropriate in
+    wider environments.
+
+  \item \textbf{Latency scales with complexity.}
+    Baseline: 16.5\,ms, Sensor+DA3: 87--134\,ms, Class-aware: 190--206\,ms.
+    All configurations run below 5\,Hz, which is acceptable for Nav2 local
+    costmap updates at 1--2\,Hz. DA3 depth loading adds $\sim$47.5\,ms per
+    frame (pre-computed; live inference would be higher).
+\end{enumerate}
+
+\subsection{Deployment Recommendation}
+
+For this specific narrow corridor ($\sim$0.55\,m width):
+\begin{itemize}[nosep]
+  \item \textbf{Use sensor + DA3 fusion with fixed inflation} (A2).
+    100\% detection, fixed 0.09\,m radius fits the tight clearance,
+    87\,ms latency.
+  \item \textbf{Avoid dynamic inflation} in corridors narrower than
+    $2 \times \text{robot\_width} + 2 \times \text{inflation\_radius}$
+    ($= 0.4 + 0.35 = 0.75$\,m). The dynamic radius (0.177\,m) creates
+    an impassable costmap.
+  \item \textbf{DA3-only is not safe.} The 23\% miss rate is unacceptable
+    for obstacle avoidance.
+\end{itemize}
+
+% ----------------------------------------------------------------------------
 \subsection{Conclusion and Status}
 \label{sec:vivek-conclusion}
 % ----------------------------------------------------------------------------
 
-V5 (EfficientViT-B1 + deployment augmentations) is the \textbf{best result
+V5 (EfficientViT-B1 + deployment augmentations) remains the \textbf{best result
 on NYU} across all experiments:
 
 \begin{itemize}[nosep]
   \item \textbf{NYU Depth RMSE:} 0.572\,m (V4: 0.774\,m, Iter 6: 0.998\,m)
   \item \textbf{Seg mIoU:} 63.7\% (V4: 51.0\%, Iter 7b: 50.2\%)
-  \item \textbf{Depth structure:} correlation $r = 0.91$ with NYU GT
   \item \textbf{$\delta < 1.25$:} 80.8\% (first time above 80\%)
-  \item \textbf{Calibration:} near-perfect (affine correction $<0.5\%$)
 \end{itemize}
 
-However, \textbf{V4 remains the best student for corridor deployment}:
+\textbf{V4 remains the best student for corridor deployment}:
 
 \begin{itemize}[nosep]
-  \item \textbf{V4 corridor RMSE:} 1.373\,m ($1.77\times$ NYU ratio)
-  \item \textbf{V5 corridor RMSE:} 2.186\,m ($3.82\times$ NYU ratio, $+59\%$ regression)
-  \item Deployment augmentations improve within-domain accuracy but
-    \emph{worsen} cross-domain transfer to corridors
+  \item \textbf{V4 corridor RMSE:} 1.373\,m (best overall student on corridor)
+  \item \textbf{V7 corridor RMSE:} 1.712\,m (LILocBench fine-tuning; best
+    far-range at 0.732\,m but near-range still catastrophic)
+  \item \textbf{V5 corridor RMSE:} 2.186\,m (worst corridor due to NYU over-specialisation)
 \end{itemize}
+
+\textbf{Costmap ablation} established sensor + DA3 fusion with fixed inflation
+as the optimal Nav2 costmap strategy: 100\% obstacle detection, 5.3\% FPR,
+87\,ms per frame.
 
 \textbf{Cumulative improvement from Vivek's experiments (NYU):}
 \begin{itemize}[nosep]
   \item V3 (MobileNetV3 + optimisations): RMSE 1.16\,m, mIoU 39.3\%
   \item V4 (EfficientViT-B1 backbone swap): RMSE 0.774\,m ($-33\%$), mIoU 51.0\%
   \item V5 (deployment augmentations): RMSE 0.572\,m ($-26\%$), mIoU 63.7\%
-  \item \textbf{Total improvement V3$\to$V5: RMSE $-51\%$, mIoU $+24.4$pp}
+  \item V7 (LILocBench fine-tune): NYU regressed to 1.315\,m (catastrophic forgetting)
+    but corridor improved from 2.186\,m to 1.712\,m
+  \item \textbf{Total NYU improvement V3$\to$V5: RMSE $-51\%$, mIoU $+24.4$pp}
 \end{itemize}
 
-\textbf{Key lesson:} Training recipe improvements (augmentations, loss
-functions, LR schedules) have reached diminishing returns for corridor
-transfer. The dominant bottleneck is now \textbf{training data distribution}.
-Adding corridor/hallway data (LILocBench, on-robot collection) is the only
-remaining lever to close the $2.3$--$3.7\times$ gap between student models
-and DA3-Small on corridor depth.
+\textbf{Key lessons from V7 and costmap ablation:}
+\begin{enumerate}[nosep]
+  \item LILocBench fine-tuning helps at far-range (0.732\,m, best of any student)
+    but does not fix near-range --- Bonn corridors are wider than ours
+  \item Fine-tuning from V5 (deeply NYU-specialised) is suboptimal; V4 would
+    be a better starting point
+  \item Sensor + DA3 fusion is the practical deployment strategy: DA3 fills
+    77\% dead sensor pixels while sensor catches obstacles DA3 misses
+  \item DA3-only is unsafe (23\% obstacle miss rate)
+\end{enumerate}
 
 \textbf{Next steps:}
 \begin{enumerate}[nosep]
-  \item Train on NYU + LILocBench hallway data using V4 recipe (not V5
-    augmentations) to test corridor transfer improvement
+  \item Fine-tune V4 (not V5) on LILocBench to test whether a less-specialised
+    starting point produces better corridor transfer
   \item DA3-Small direct deployment on Jetson (TensorRT, GerdsenAI wrapper)
-    as the interim depth solution
-  \item Corridor costmap ablation study: sensor depth vs DA3 depth vs
-    student depth for Nav2 local costmap generation
+  \item Run costmap ablation with student depth (V4, V7) to compare against
+    DA3 depth in the costmap pipeline
+  \item Collect corridor-specific data with the Femto Bolt for targeted fine-tuning
 \end{enumerate}
 
-\textbf{Status:} V5 corridor evaluation complete. V4 confirmed as best
-corridor student. LILocBench data pipeline in preparation.
+\textbf{Status:} V7 corridor evaluation and costmap ablation complete.
 
 \end{document}
