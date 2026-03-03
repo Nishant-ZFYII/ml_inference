@@ -1738,6 +1738,7 @@ Mar 2, 2026  & V5 corridor evaluation: RMSE 2.186\,m ($+59\%$ regression vs V4's
 Mar 2, 2026  & \textbf{Key finding:} deployment augmentations improve NYU accuracy but worsen corridor transfer \\
 Mar 2, 2026  & V4 confirmed as best corridor student; LILocBench data pipeline in preparation \\
 Mar 2, 2026  & V7 (LILocBench fine-tune of V5) corridor eval: RMSE 1.712\,m; far-range best at 0.732\,m \\
+Mar 2, 2026  & V6 corridor eval: catastrophic failure (RMSE 8.42\,m, predictions up to 149\,m) \\
 Mar 2, 2026  & Costmap ablation (7 experiments): sensor+DA3 fusion optimal (100\% detection, 5.3\% FPR) \\
 Mar 2, 2026  & Corridor width measured at 0.55\,m mean; DA3-only misses 23\% of obstacles \\
 \bottomrule
@@ -2751,6 +2752,68 @@ Iter 6 B1              & 2.777 & 2.922 & 2.936 & 1.982 &  2.3\% \\
     ratio of V5 narrows only to $\sim$$3.0\times$ with V7, whereas V4 starts
     at $1.77\times$.
 \end{enumerate}
+
+% ----------------------------------------------------------------------------
+\subsection{V6 Corridor Evaluation (Iteration 12b)}
+\label{sec:vivek-v6-corridor}
+% ----------------------------------------------------------------------------
+
+V6 is another variant from Vivek, achieving $\sim$0.5\,m RMSE on NYU
+(comparable to V5's 0.572\,m). Evaluated on the same 459 Femto Bolt
+corridor frames for completeness.
+
+\subsubsection{Results}
+
+\begin{longtable}{lrrrr}
+\toprule
+\textbf{Region} & \textbf{RMSE (m)} & \textbf{MAE (m)} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+\endfirsthead
+All valid          & \textcolor{regression}{\textbf{8.421}} & 4.179 & 7.458 &  5.7\% \\
+Near (0.3--1.0\,m) & 8.137 & 4.371 & 9.362 &  0.5\% \\
+Mid (1.0--2.0\,m)  & 7.422 & 3.257 & 2.352 &  8.5\% \\
+Far (2.0--4.0\,m)  & 11.383 & 4.738 & 1.798 & 30.5\% \\
+Top 2/3 (walls)    & 8.349 & 4.033 & 4.973 &  8.1\% \\
+Bottom 1/3 (floor) & 8.579 & 4.504 & 12.992 &  0.2\% \\
+\bottomrule
+\end{longtable}
+
+\textbf{Student prediction range:} 0.000--149.388\,m (mean 4.607\,m, median
+2.706\,m). Predictions reaching 149\,m indoors indicate the model's depth
+scale is completely broken for this camera and environment.
+
+\subsubsection{Analysis}
+
+V6 is \textbf{catastrophically worse than every other model tested}:
+8.42\,m RMSE in a corridor where nothing is beyond 3\,m. For comparison:
+
+\begin{longtable}{lrr}
+\toprule
+\textbf{Model} & \textbf{Corridor RMSE} & \textbf{NYU RMSE} \\
+\midrule
+\endfirsthead
+DA3-SMALL (median)   & \textcolor{improved}{\textbf{0.596\,m}} & --- \\
+V4 best\_depth       & 1.373\,m & 0.774\,m \\
+V7 best\_depth       & 1.712\,m & 1.315\,m \\
+V5 best\_depth       & 2.186\,m & 0.572\,m \\
+Iter 6 B1            & 2.777\,m & 0.998\,m \\
+\textbf{V6 best\_depth} & \textcolor{regression}{\textbf{8.421\,m}} & $\sim$0.5\,m \\
+\bottomrule
+\end{longtable}
+
+The pattern is similar to the DA3METRIC-LARGE focal conversion failure
+(Section~\ref{sec:iter9}, 4.30\,m RMSE) but even more severe. Despite
+achieving $\sim$0.5\,m on NYU, V6 produces predictions that are
+$\sim$9.4\times$ the true depth on average (AbsRel 9.36 at near-range).
+The NYU-to-corridor degradation ratio is $\sim$$16.8\times$ --- by far
+the worst of any model.
+
+This suggests V6's training introduced a scale or output range change that
+is incompatible with the Femto Bolt camera's depth distribution. The exact
+cause requires inspection of V6's training configuration.
+
+\textbf{V4 remains the best student model for corridor deployment} at
+1.373\,m RMSE.
 
 % ============================================================================
 \section{Costmap Ablation Study (Iteration 13)}
