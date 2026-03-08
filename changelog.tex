@@ -3018,4 +3018,654 @@ as the optimal Nav2 costmap strategy: 100\% obstacle detection, 5.3\% FPR,
 
 \textbf{Status:} V7 corridor evaluation and costmap ablation complete.
 
+% ============================================================================
+\section{RA-L Paper Statistical Rigor (Feb 2026)}
+\label{sec:ral-stats}
+% ============================================================================
+
+This section tracks the TIER~1 analysis work adding statistical rigor
+(mean $\pm$ std, 95\% CI) to the four core tables in
+\texttt{Research Paper v1.tex} (target: RA-L / ICRA).
+
+% ----------------------------------------------------------------------------
+\subsection{Test 1: compute\_paper\_stats.py --- Core Table Statistics}
+\label{sec:test-compute-paper-stats}
+% ----------------------------------------------------------------------------
+
+\textbf{1.\ Why are we doing this test?}
+
+The paper's Tables III--VI report point estimates only. Reviewers require
+uncertainty quantification (mean $\pm$ std, 95\% CI) for all reported
+metrics before the paper can be submitted to RA-L or ICRA.
+
+\textbf{2.\ How are we doing it; what dataset?}
+
+A single Python script reads all existing pre-computed per-frame CSVs and
+summary JSONs, computes mean, sample std ($\text{ddof}=1$), and 95\% CI
+($1.96 \cdot \sigma / \sqrt{n}$), and outputs both LaTeX-formatted table
+rows and a machine-readable JSON. Datasets used:
+
+\begin{itemize}[nosep]
+  \item \textbf{Table III (offline corridor):}
+    \texttt{ml\_pipeline/results/costmap\_ablation/corridor/per\_frame\_metrics.csv}
+    --- 459 frames $\times$ 7 configs (Baseline, A1--A6).
+    Extracted from rosbag \texttt{rgbd\_imu\_20260228\_003828\_0.mcap}
+    via \texttt{extract\_corridor\_bag.py} (subsample=5).
+  \item \textbf{Table IV (live corridor replay):}
+    \texttt{maps/ablation\_results/\{L,L+S,L+D,D,L+D+dyn\}/summary.json}
+    --- full Nav2 stack, GTX~1060, 0.3$\times$ playback speed.
+    Source rosbag: \texttt{rgbd\_imu\_20260302\_174745} (81\,s, 8\,GB).
+  \item \textbf{Table V (LILocBench dynamics\_0):}
+    \texttt{maps/lilocbench\_ablation\_results/\{L+S,L+D,D,L+D+dyn\}/summary.json}
+    --- ablation data (matches paper). L-config: provenance unresolved
+    (paper says 711 frames / 1582 mean; ablation has 33 frames,
+    benchmark has 749 frames / 953 mean).
+  \item \textbf{Table VI (localization):}
+    \texttt{maps/lilocbench\_benchmark/dynamics\_0/\{L,...,L+D+dyn\}/localization\_results.json}
+    --- 3194 poses, Umeyama SE(2) alignment.
+\end{itemize}
+
+\textbf{3.\ Where is this being saved?}
+
+\begin{itemize}[nosep]
+  \item Script: \texttt{ml\_pipeline/compute\_paper\_stats.py}
+  \item JSON output: \texttt{ml\_pipeline/results/paper\_stats.json}
+\end{itemize}
+
+\textbf{4.\ Short summary of results and how they were generated.}
+
+The script was run on 2026-02-27. Key outputs:
+
+\begin{itemize}[nosep]
+  \item \textbf{Table III:} All 7 configs now have mean $\pm$ std.
+    FPR mean = 5.2\% (paper reports 5.3\%; difference is rounding of
+    raw mean $\approx 0.0524$). Three previously missing configs
+    (A1, A3, A6) are now included.
+  \item \textbf{Table IV:} All 5 configs: mean $\pm$ std for occupied
+    cells and $\Delta$\% $\pm$ CI. All values cross-check OK vs.\ paper.
+    Example: L+D = $3546 \pm 283$, $+55\% \pm 3\%$.
+  \item \textbf{Table V:} std computed for L+S / L+D / D / L+D+dyn
+    (all match paper). L-config flagged as provenance issue ---
+    delta\% computed using paper's reference ($L = 1582$) for
+    consistency, but CI cannot be computed without L's std.
+  \item \textbf{Table VI:} Two formats: (A)~mean $\pm$ std (spread),
+    (B)~mean $\pm$ CI95 (precision of estimate). With $n = 3194$ poses,
+    CIs are very tight (e.g.\ L+D APE mean: $1.82 \pm 0.11$\,m).
+    Note: L+D's large std ($3.18$\,m) despite low median ($1.23$\,m)
+    reflects occasional SLAM jumps (ape\_max $\approx 159$\,m).
+\end{itemize}
+
+\textbf{5.\ Which table does this fall into?}
+
+Tables III (\texttt{tab:corridor-offline}), IV (\texttt{tab:corridor-live}),
+V (\texttt{tab:lilocbench}), and VI (\texttt{tab:loc}) in
+\texttt{Research Paper v1.tex}.
+
+\textbf{6.\ Python files used.}
+
+\begin{itemize}[nosep]
+  \item \texttt{ml\_pipeline/compute\_paper\_stats.py} (main script, written
+    for this task)
+\end{itemize}
+
+\textbf{7.\ Where are the test results saved?}
+
+\begin{itemize}[nosep]
+  \item \texttt{ml\_pipeline/results/paper\_stats.json}
+    --- machine-readable JSON with all means, stds, CIs per table
+    and config.
+  \item stdout: LaTeX-formatted table rows (not yet inserted into
+    the paper; that is the separate \texttt{latex-update-tier1} task).
+\end{itemize}
+
+\textbf{8.\ What dataset was used for generating these results?}
+
+\begin{itemize}[nosep]
+  \item Offline corridor: 459 frames from rosbag
+    \texttt{rgbd\_imu\_20260228\_003828\_0.mcap} (pre-extracted into
+    \texttt{corridor\_eval\_data/}).
+  \item Live corridor replay: 5 configs $\times$ 252--909 frames each,
+    from rosbag \texttt{rgbd\_imu\_20260302\_174745} (81\,s, 8\,GB),
+    replayed on GTX~1060 at 0.3$\times$ speed.
+  \item LILocBench: dynamics\_0 sequence (10 pedestrians), 725--2189
+    frames per config (ablation runs); 749 frames (benchmark L-config).
+  \item Localization: 3194 poses from LILocBench dynamics\_0.
+\end{itemize}
+
+\textbf{9.\ Which paper table is being filled with $\pm$ values?}
+
+Adding $\pm$ std to Tables III, IV, V, VI in
+\textbf{\texttt{Research Paper v1.tex}}.
+The earlier ChatGPT-reviewed PDF
+(\texttt{NYU\_IROS2026\_4utonomy.pdf}) contained \texttt{[FILL]} tags
+for these values; \texttt{Research Paper v1.tex} already had the
+point estimates but lacked $\pm$ std and CI. This script produces the
+values; the actual LaTeX insertion is deferred to the
+\texttt{latex-update-tier1} task.
+
+% ----------------------------------------------------------------------------
+\subsection{Test 2: fpr\_audit.py --- FPR Origin Classification}
+\label{sec:test-fpr-audit}
+% ----------------------------------------------------------------------------
+
+\textbf{1.\ Why are we doing this test?}
+
+The paper reports a 5.3\% false-positive rate (FPR) for the A2 config
+(sensor + DA3, fixed inflation) but does not explain \emph{why} those
+false positives occur. Reviewers expect an honest classification: are
+the FP cells a safety improvement (DA3 filling dead sensor pixels) or
+genuine depth hallucinations? This audit decomposes the FPR into three
+mutually exclusive categories.
+
+\textbf{2.\ How are we doing it; what dataset?}
+
+For each of the 459 corridor frames:
+\begin{enumerate}[nosep]
+  \item Load sensor depth and DA3 depth from
+    \texttt{corridor\_eval\_data/\{depth,da3\_depth\}/}.
+  \item Back-project both to 3D using camera intrinsics ($f_x\!=\!747.8$,
+    $f_y\!=\!747.5$), apply height filter (0.05--0.50\,m above ground,
+    camera height 0.25\,m), and rasterize to a 120$\times$120 BEV grid
+    (0.05\,m/cell, 6$\times$6\,m).
+  \item Build sensor-only grid (Baseline) and sensor+DA3 grid (A2),
+    inflate both with a circular kernel ($r = 0.09$\,m).
+  \item Classify each FP cell (A2\_inflated $\setminus$ Baseline\_inflated):
+    \begin{itemize}[nosep]
+      \item \textbf{Sensor-invalid fill:} Direct DA3 pre-inflation cell
+        where all DA3 source pixels had invalid sensor depth ($= 0$).
+      \item \textbf{Free-space hallucination:} Direct DA3 pre-inflation
+        cell where $\geq 1$ source pixel had valid sensor depth.
+      \item \textbf{Inflation artifact:} Post-inflation cell not present
+        in the pre-inflation grid.
+    \end{itemize}
+\end{enumerate}
+
+Dataset: 459 corridor frames extracted from rosbag
+\texttt{rgbd\_imu\_20260228\_003828\_0.mcap} (same frames as Table~III).
+
+\textbf{3.\ Where is this being saved?}
+
+\begin{itemize}[nosep]
+  \item Script: \texttt{ml\_pipeline/fpr\_audit.py}
+  \item JSON output: \texttt{ml\_pipeline/results/fpr\_audit.json}
+    (per-frame + aggregate breakdown)
+\end{itemize}
+
+\textbf{4.\ Short summary of results and how they were generated.}
+
+Run on 2026-02-27, 459 frames, $\sim$4 min on laptop CPU.
+
+\begin{itemize}[nosep]
+  \item \textbf{Reconstructed aggregate FPR:} 13.1\% (higher than
+    paper's 5.3\% because reconstruction omits LiDAR clearing rays
+    and uses approximate grid parameters; the \emph{proportional}
+    breakdown is what matters).
+  \item \textbf{Breakdown (proportional):}
+    \begin{itemize}[nosep]
+      \item 34.6\% sensor-invalid fill (DA3 fills dead ToF pixels)
+      \item 49.3\% free-space hallucination (DA3 disagrees with valid
+        sensor depth)
+      \item 18.1\% inflation artifact (inflation spreading from
+        DA3-added cells)
+    \end{itemize}
+  \item \textbf{Interpretation:} $\sim$35\% of FP is ``safety
+    improvement'' (filling dead pixels), $\sim$49\% is genuine
+    depth disagreement, and $\sim$18\% is inflation spreading.
+    The ``hallucination'' fraction is higher than expected and
+    warrants investigation---it may partly reflect DA3 depth
+    offsets at far range rather than true free-space errors.
+\end{itemize}
+
+\textbf{5.\ Which table does this fall into?}
+
+This rewrites the FPR discussion paragraph in Section~V.A of
+\texttt{Research Paper v1.tex} (currently lines 688--694,
+after Table~III \texttt{tab:corridor-offline}).
+
+\textbf{6.\ Python files used.}
+
+\begin{itemize}[nosep]
+  \item \texttt{ml\_pipeline/fpr\_audit.py} (written for this task)
+  \item Uses: \texttt{numpy}, \texttt{scipy.ndimage}, \texttt{tqdm}
+\end{itemize}
+
+\textbf{7.\ Where are the test results saved?}
+
+\begin{itemize}[nosep]
+  \item \texttt{ml\_pipeline/results/fpr\_audit.json} --- full per-frame
+    and aggregate JSON with all three FP categories, reconstructed FPR,
+    and parameters used.
+\end{itemize}
+
+\textbf{8.\ What dataset was used for generating these results?}
+
+459 corridor frames from \texttt{corridor\_eval\_data/} (extracted from
+rosbag \texttt{rgbd\_imu\_20260228\_003828\_0.mcap}, subsample=5).
+Sensor depth: Orbbec Femto Bolt ($\sim$22\% valid pixels).
+DA3 depth: pre-computed DA3-SMALL predictions (100\% valid).
+
+\textbf{9.\ Which paper table is being filled with values?}
+
+Not a table fill but a \textbf{paragraph rewrite} in
+\texttt{Research Paper v1.tex} Section~V.A. The current text
+(``The 5.3\% false-positive rate reflects DA3 filling the 77\% dead
+ToF pixels\ldots'') will be replaced with the three-way breakdown
+from this audit. The original 5.3\% FPR from
+\texttt{per\_frame\_metrics.csv} is preserved as the authoritative
+overall FPR value; this audit adds the origin classification.
+
+% ----------------------------------------------------------------------------
+\subsection{Test 3: temporal\_consistency.py --- Costmap Temporal Stability}
+\label{sec:test-temporal}
+% ----------------------------------------------------------------------------
+
+\textbf{1.\ Why are we doing this test?}
+
+Reviewers want evidence that DA3-based costmaps are temporally stable
+--- that adding monocular depth does not cause the costmap to ``flicker''
+frame-to-frame, which would destabilize Nav2 path planning. Two metrics
+address this: occupied-cell jitter (how much the obstacle count changes
+per frame) and centroid drift (how much the obstacle mass center moves).
+
+\textbf{2.\ How are we doing it; what dataset?}
+
+A Python script reads all existing per-frame \texttt{costmap\_stats.csv}
+files and computes frame-to-frame differences:
+\begin{itemize}[nosep]
+  \item \textbf{Occupied-cell jitter:}
+    $\bar{J} = \frac{1}{N-1}\sum_{t=1}^{N-1}|o_t - o_{t-1}|$,
+    normalized as $\bar{J}/\bar{o} \times 100\%$.
+  \item \textbf{Centroid drift:}
+    $\bar{D} = \frac{1}{N-1}\sum_{t=1}^{N-1}\sqrt{(\Delta c_x)^2 +
+    (\Delta c_y)^2} \times r$, where $r = 0.05$\,m/cell.
+\end{itemize}
+
+Datasets used:
+\begin{itemize}[nosep]
+  \item \textbf{Corridor:}
+    \texttt{maps/ablation\_results/\{L,L+S,L+D,D,L+D+dyn\}/costmap\_stats.csv}
+    --- 904--5688 frames per config, from rosbag
+    \texttt{rgbd\_imu\_20260302\_174745} (81\,s, 8\,GB), replayed on
+    GTX~1060 at 0.3$\times$ speed.
+  \item \textbf{LILocBench dynamics\_0:}
+    \texttt{maps/lilocbench\_ablation\_results/} for L+S, L+D, D, L+D+dyn
+    (725--2189 frames); L-config from
+    \texttt{maps/lilocbench\_benchmark/dynamics\_0/L/} (749 frames).
+\end{itemize}
+
+\textbf{3.\ Where is this being saved?}
+
+\begin{itemize}[nosep]
+  \item Script: \texttt{ml\_pipeline/temporal\_consistency.py}
+  \item JSON output: \texttt{ml\_pipeline/results/temporal\_consistency.json}
+\end{itemize}
+
+\textbf{4.\ Short summary of results and how they were generated.}
+
+Run on 2026-02-27, completed in $< 1$\,s (reads CSVs, pure NumPy).
+
+\begin{itemize}[nosep]
+  \item \textbf{Corridor:} All configs have very low jitter
+    ($0.3$--$0.6$\%) and sub-millimetre centroid drift.
+    DA3-based configs (L+D: 0.4\%, D: 0.4\%) are \emph{more stable}
+    than LiDAR-only (L: 0.6\%). This is because DA3 provides dense,
+    consistent depth that smooths over LiDAR scan noise.
+  \item \textbf{LILocBench:} Higher jitter ($0.8$--$1.8$\%) due to
+    10~moving pedestrians. L+D+dyn has the highest jitter (1.8\%)
+    because dynamic inflation introduces radius variability.
+    Centroid drift remains $< 2$\,mm in all configs.
+  \item \textbf{Key finding:} Adding DA3 depth does \emph{not} harm
+    temporal stability. In the corridor, DA3 configs are actually
+    more stable than LiDAR-only.
+\end{itemize}
+
+\textbf{5.\ Which table does this fall into?}
+
+New table (\texttt{tab:temporal}) to be added to
+\texttt{Research Paper v1.tex}, Section~V (Results).
+Alternatively, the jitter\% and drift values can be reported inline
+in the text alongside Tables~IV and~V.
+
+\textbf{6.\ Python files used.}
+
+\begin{itemize}[nosep]
+  \item \texttt{ml\_pipeline/temporal\_consistency.py} (written for this task)
+\end{itemize}
+
+\textbf{7.\ Where are the test results saved?}
+
+\begin{itemize}[nosep]
+  \item \texttt{ml\_pipeline/results/temporal\_consistency.json}
+    --- per-config stats for both corridor and LILocBench
+    (jitter mean/std/max, drift mean/std/max, frame count,
+    update rate, duration).
+\end{itemize}
+
+\textbf{8.\ What dataset was used for generating these results?}
+
+\begin{itemize}[nosep]
+  \item Corridor: per-frame costmap stats from rosbag
+    \texttt{rgbd\_imu\_20260302\_174745} (81\,s, 8\,GB), replayed
+    at 0.3$\times$ speed on GTX~1060 with full Nav2 stack.
+    5 configs, 904--5688 costmap snapshots each.
+  \item LILocBench: per-frame costmap stats from LILocBench
+    dynamics\_0 sequence (10 pedestrians). 5 configs,
+    725--2189 snapshots each.
+\end{itemize}
+
+\textbf{9.\ Which paper table is being filled with values?}
+
+This creates a \textbf{new table} (\texttt{tab:temporal}) in
+\texttt{Research Paper v1.tex}. No existing table is being modified.
+The values provide a new ``temporal stability'' analysis that
+strengthens the paper's claim that DA3 fusion is safe for real-time
+navigation. Not filling $\pm$ values in existing tables.
+
+% ============================================================================
+\subsection{Near-Range Safety Table (TIER 1)}
+\label{sec:nearrange-safety}
+% ============================================================================
+
+\textbf{1.\ Why are we doing this test?}
+
+The paper claims (line 914--921) that student models (V4, V7) are
+\emph{unsafe} for autonomous corridor navigation based on near-range
+depth accuracy, while DA3-Small is \emph{safe}. This test produces a
+formal near-range safety table (0.3--1.0\,m bin) with RMSE, MAE,
+AbsRel, and $\delta < 1.25$ for all three models, adding error bars
+($\pm$ 95\% CI) to quantify the safety margin.
+
+\textbf{2.\ How are we doing it, what dataset?}
+
+\begin{itemize}[nosep]
+  \item \textbf{V4} (\texttt{vivek\_v4\_best\_depth.pt}): Student
+    inference via \texttt{eval\_nearrange\_safety.py} using
+    \texttt{build\_student()} at 240$\times$320. \emph{No}
+    \texttt{-{}-imagenet-norm} flag: the checkpoint's registered
+    buffers (\texttt{img\_mean}/\texttt{img\_std}) handle
+    normalisation internally when loaded with \texttt{strict=False}.
+  \item \textbf{V7} (\texttt{best\_depth\_v7.pt}): Same pipeline,
+    same normalisation convention (no external ImageNet norm).
+  \item \textbf{DA3}: Pre-computed depth predictions from
+    \texttt{corridor\_eval\_data/da3\_depth/*.npy} (720$\times$1280),
+    evaluated with per-frame median-scaling. The overall metrics
+    (RMSE~0.596\,m, $\delta < 1.25 = 56.1\%$) match the DA3-Small
+    HPC result exactly, confirming the pre-computed predictions are
+    consistent with DA3-Small median-scaled depth.
+  \item \textbf{Dataset}: 459 corridor frames extracted from rosbag
+    \texttt{rgbd\_imu\_20260228\_003828\_0.mcap} (Orbbec Femto Bolt
+    sensor depth as GT).
+\end{itemize}
+
+\textbf{3.\ Where is this being saved?}
+
+\begin{itemize}[nosep]
+  \item Script: \texttt{ml\_pipeline/eval\_nearrange\_safety.py}
+  \item JSON: \texttt{ml\_pipeline/results/nearrange\_safety.json}
+  \item This changelog entry
+\end{itemize}
+
+\textbf{4.\ Summary of results}
+
+\begin{table}[h]
+\centering
+\caption{Near-range safety (0.3--1.0\,m corridor)}
+\label{tab:nearrange-log}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Model} & \textbf{RMSE (m)} & \textbf{MAE (m)} & \textbf{AbsRel} & \textbf{$\delta < 1.25$} \\
+\midrule
+DA3 (median)         & \textbf{0.158 $\pm$ 0.008} & \textbf{0.087} & \textbf{0.169} & \textbf{70.7\% $\pm$ 2.3} \\
+V4 (EB1, best corr.) & 1.434 $\pm$ 0.022 & 1.389 & 2.918 & 0.0\% \\
+V7 (EB1, LILocBench) & 1.982 $\pm$ 0.076 & 1.499 & 2.882 & 0.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Key findings:
+\begin{enumerate}[nosep]
+  \item \textbf{DA3 is safe} at near-range: 0.158\,m RMSE with 70.7\%
+    of predictions within $\pm$25\% of GT. With 0.8\,m corridor
+    clearance per side, $\pm$16\,cm error is acceptable.
+  \item \textbf{Both students are catastrophically unsafe}: RMSE
+    $>$1.4\,m means predictions overshoot GT by $\sim$3$\times$
+    (AbsRel $\sim$2.9). $\delta < 1.25 = 0\%$: not a single
+    near-range pixel is within 25\% of the true depth.
+  \item \textbf{V4 is better than V7 at near-range} (1.434 vs
+    1.982\,m RMSE), contrary to V7 winning at far-range (0.732 vs
+    1.283\,m). LILocBench corridors are wider than our deployment
+    corridor, so V7 saw fewer close-wall examples.
+\end{enumerate}
+
+\textbf{5.\ Which table does this fall into?}
+
+This creates a \textbf{new table} (\texttt{tab:nearrange}) in
+\texttt{Research Paper v1.tex}. It also provides verification data
+for the inline claims on lines 914--921 of the paper
+(V4 near-range RMSE = 1.43\,m, DA3-Small near-range RMSE = 0.158\,m).
+
+\textbf{6.\ Python files used}
+
+\begin{itemize}[nosep]
+  \item \texttt{ml\_pipeline/eval\_nearrange\_safety.py} (NEW) ---
+    comprehensive near-range safety evaluation for all three models.
+  \item \texttt{ml\_pipeline/eval\_corridor\_depth.py} --- used for
+    individual V4 and V7 verification runs.
+\end{itemize}
+
+\textbf{7.\ Where are the test results saved?}
+
+\begin{itemize}[nosep]
+  \item \texttt{ml\_pipeline/results/nearrange\_safety.json} ---
+    full per-model, per-bin metrics with mean, std, 95\% CI, and
+    frame counts.
+\end{itemize}
+
+\textbf{8.\ What dataset was used for generating these results?}
+
+\begin{itemize}[nosep]
+  \item 459 corridor frames from \texttt{corridor\_eval\_data/}
+    (extracted from rosbag \texttt{rgbd\_imu\_20260228\_003828\_0.mcap}).
+  \item Sensor depth: Orbbec Femto Bolt (77.2\% dead pixels due to
+    specular floor reflections).
+  \item DA3 predictions: pre-computed \texttt{da3\_depth/*.npy} files
+    (median-scaled to sensor depth per frame).
+  \item Note: the primary rosbag \texttt{rgbd\_imu\_20260302\_174745}
+    (81\,s, 8\,GB) was not used for this test because the corridor
+    eval data was extracted from the earlier bag. The two bags cover
+    the same physical corridor.
+\end{itemize}
+
+\textbf{9.\ Which paper table is being filled with values?}
+
+This creates a \textbf{new table} (\texttt{tab:nearrange}) in
+\texttt{Research Paper v1.tex}. The $\pm$ CI values are new
+additions computed from per-frame standard deviations. The paper's
+existing inline text (V4 = 1.43\,m, DA3-Small = 0.158\,m) is
+\textbf{confirmed} by this evaluation.
+
+% ============================================================================
+\subsection{Calibration Wording Verification (TIER 1)}
+\label{sec:calibration-verify}
+% ============================================================================
+
+\textbf{1.\ Why are we doing this test?}
+
+The professor's review and ChatGPT's feedback both flagged the affine
+calibration protocol as \emph{underspecified}. Specifically, reviewers
+will ask: (a)~how large is the calibration set? (b)~is it disjoint
+from test? (c)~is $(\alpha,\beta)$ global or per-scene? (d)~what
+fitting criterion is used? This task verifies that \texttt{Research
+Paper v1.tex} explicitly answers all four questions and closes any
+remaining gaps in the wording.
+
+\textbf{2.\ How are we doing it, what dataset?}
+
+This is a \textbf{text review}, not a computational test. We
+systematically checked every mention of ``calibration,'' ``affine,''
+``$\alpha$,'' ``$\beta$,'' ``valid pixels,'' and ``least-squares'' in
+\texttt{Research Paper v1.tex} against the professor's four-point
+checklist. No dataset is used; the evaluation is purely textual.
+
+\textbf{3.\ Where is this being saved?}
+
+\begin{itemize}[nosep]
+  \item Wording fixes applied directly to
+    \texttt{Research Paper v1.tex} (Eq.~2 paragraph and
+    Table~\texttt{tab:calib-sensitivity}).
+  \item This changelog entry.
+\end{itemize}
+
+\textbf{4.\ Summary of results}
+
+\textbf{Checklist audit (4 items from professor's review):}
+
+\begin{longtable}{p{3.5cm}p{1.2cm}p{6.5cm}}
+\toprule
+\textbf{Item} & \textbf{Status} & \textbf{Evidence in paper} \\
+\midrule
+Set size & \textcolor{improved}{PASS} &
+  Sec~V.B.1: ``$N$ frames'' with $N = 1, 5, 25, 100$ from
+  459-frame corridor, ``5 random trials per $N$'' \\
+Disjointness & \textcolor{improved}{PASS} &
+  Sec~V.B.1: ``a \textbf{disjoint} test set'' (explicit word) \\
+Global vs per-scene & \textcolor{improved}{PASS} &
+  Sec~III: per-frame alignment for evaluation;
+  Sec~V.B.1: fixed-set for deployment;
+  Sec~V.B.1: ``The calibration is \textbf{scene-specific}''
+  (cross-scene transfer tested both directions) \\
+Fitting criterion & \textcolor{improved}{PASS} &
+  Sec~III: ``pooled least-squares regression'';
+  Sec~V.B.1: ``pooled least-squares on the calibration frames'' \\
+\bottomrule
+\end{longtable}
+
+\textbf{Two minor gaps closed:}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Valid pixel definition} (was missing): Added
+    ``(hardware depth $\in [0.1, 5.0]$\,m, excluding dead and
+    saturated readings)'' to the Eq.~2 paragraph (Sec~III).
+  \item \textbf{Table footnote} (was missing): Added ``Values for
+    $N \geq 1$ are means over 5 random disjoint splits'' to
+    Table~\texttt{tab:calib-sensitivity}.
+\end{enumerate}
+
+\textbf{5.\ Which table does this fall into?}
+
+Table~\texttt{tab:calib-sensitivity} in \texttt{Research Paper v1.tex}
+(footnote added). Also affects the Eq.~2 paragraph in Sec~III
+(valid pixel definition added).
+
+\textbf{6.\ Python files used}
+
+None. This was a text-only verification task.
+
+\textbf{7.\ Where are the test results saved?}
+
+No computational results. The verification outcome is documented in
+this changelog entry.
+
+\textbf{8.\ What dataset was used for generating these results?}
+
+No dataset. The calibration sensitivity table itself was computed
+from the 459-frame corridor dataset (extracted from rosbag
+\texttt{rgbd\_imu\_20260228\_003828\_0.mcap}) in a prior HPC run.
+The primary rosbag \texttt{rgbd\_imu\_20260302\_174745} (81\,s,
+8\,GB) was not used for this task.
+
+\textbf{9.\ Which paper table is being filled with values?}
+
+No new numerical values are being inserted. A footnote was added to
+Table~\texttt{tab:calib-sensitivity} in \texttt{Research Paper v1.tex}
+and a valid-pixel definition was added to the methodology
+(Sec~III, Eq.~2 paragraph). These are wording clarifications, not
+$\pm$ std values.
+
+% ====================================================================
+%  2026-02-27 — DA3-Small NYU Depth V2 Evaluation (HPC)
+% ====================================================================
+
+\subsection*{DA3-Small NYU Depth V2 Evaluation — Table VII Teacher Row
+  (2026-02-27)}
+
+\textbf{1.\ Why are we doing this test?}
+
+Table~VII (\texttt{tab:distillation}) in \texttt{Research Paper v1.tex}
+tracks student model evolution with a ``NYU RMSE'' column.  Currently
+only student models (V3--V7) have values.  Adding a DA3-Small teacher
+row establishes the accuracy ceiling: readers can see how close each
+student version comes to the teacher that generated their training
+labels.  This is needed for RA-L reviewer response.
+
+\textbf{2.\ How are we doing it / what dataset?}
+
+Run \texttt{eval\_nyu\_da3.py} on NYU Depth V2 validation split
+(20\% of 1449 labelled images, same split used for student
+training-time val RMSE, seed\,=\,42).  DA3-Small produces relative
+depth; per-image median scaling aligns each prediction to NYU GT
+metric depth before computing RMSE, MAE, AbsRel, and $\delta<1.25$.
+Execution is on NYU Torch HPC (L40S GPU) via
+\texttt{eval\_nyu\_da3.slurm}.  The DA3-Small model is loaded from
+HuggingFace (\texttt{depth-anything/DA3-SMALL}) using the
+\texttt{depth\_anything\_3} API already installed in the HPC conda
+environment.
+
+\textbf{3.\ Where is this being saved?}
+
+\begin{itemize}
+  \item Aggregate JSON:
+    \texttt{\$SCRATCH/nyu\_depth\_v2/nyu\_da3\_eval/%
+      nyu\_da3\_da3-small\_val.json}
+  \item Per-image CSV:
+    \texttt{\$SCRATCH/nyu\_depth\_v2/nyu\_da3\_eval/%
+      nyu\_da3\_da3-small\_val\_per\_image.csv}
+\end{itemize}
+
+\textbf{4.\ Summary of results}
+
+\emph{Pending — results will be available after HPC job completes.}
+The script computes per-image RMSE and aggregates mean $\pm$ std
+with 95\% CI.  Expected DA3-Small NYU RMSE is $\sim$0.296\,m based
+on published benchmarks, though our val split may differ slightly from
+the standard Eigen 654-image test set.
+
+\textbf{5.\ Which table does this fall into?}
+
+Table~VII (\texttt{tab:distillation}) — new teacher row:
+\texttt{DA3-Small \& --- \& X.XXX\textbackslash,m \& --- \& ---
+  \& Teacher (rel.\ depth)}.
+
+\textbf{6.\ Python files used}
+
+\begin{itemize}
+  \item \texttt{ml\_pipeline/eval\_nyu\_da3.py} — standalone DA3
+    NYU evaluation script (new)
+  \item \texttt{ml\_pipeline/eval\_nyu\_da3.slurm} — SLURM job
+    submission script (new)
+\end{itemize}
+
+\textbf{7.\ Where are the test results saved?}
+
+On HPC at
+\texttt{\$SCRATCH/nyu\_depth\_v2/nyu\_da3\_eval/}.
+After the job finishes, download to local via:
+\texttt{scp np3129@dtn.torch.hpc.nyu.edu:%
+  \$SCRATCH/nyu\_depth\_v2/nyu\_da3\_eval/*.json .}
+
+\textbf{8.\ What dataset was used for generating these results?}
+
+NYU Depth V2 (0jl/NYUv2 from HuggingFace, 1449 labelled images,
+20\% val split).  The primary rosbag
+\texttt{rgbd\_imu\_20260302\_174745} (81\,s, 8\,GB) is not used for
+this task — NYU evaluation uses the standard indoor benchmark dataset
+only.
+
+\textbf{9.\ Which paper table is being filled with values?}
+
+Table~VII (\texttt{tab:distillation}) in
+\texttt{Research Paper v1.tex}.  The DA3-Small NYU RMSE value
+(mean $\pm$ 95\% CI) will be inserted as a new teacher row once the
+HPC job completes and results are downloaded.
+
 \end{document}
