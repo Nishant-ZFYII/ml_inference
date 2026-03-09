@@ -35,11 +35,8 @@ class Config:
     INPUT_HEIGHT: int = 240
     INPUT_WIDTH: int = 320
 
-    # Student backbone (EfficientViT-B1 via timm)
-    BACKBONE: str = "efficientvit_b1.r288_in1k"
-    # Verified by print_model_shapes.py: stages [32, 64, 128, 256] at 1/4, 1/8, 1/16, 1/32
-    SKIP_CHANNELS: tuple = (32, 64, 128)  # stages 0, 1, 2
-    BOTTLENECK_CH: int = 256               # stage 3
+    # Student backbone (V4: EfficientViT-B1 via timm)
+    BACKBONE: str = "efficientvit_b1"
 
     # ── Teacher models ─────────────────────────────────────────────────
     DA3_MODEL: str = "depth-anything/da3metric-large"
@@ -53,10 +50,12 @@ class Config:
     NYU_W: int = 640
     NYU_H: int = 480
 
-    # ── Training ───────────────────────────────────────────────────────
+    # ── Training (V4 recipe) ──────────────────────────────────────────
     EPOCHS: int = 100
     BATCH_SIZE: int = 16
     LR: float = 1e-3
+    ENCODER_LR_SCALE: float = 0.1
+    FREEZE_ENCODER_EPOCHS: int = 5
     WEIGHT_DECAY: float = 1e-4
     GRAD_CLIP_NORM: float = 1.0
 
@@ -65,6 +64,10 @@ class Config:
     LAMBDA_SEG: float = 0.5
     LAMBDA_EDGE: float = 0.1
     CONFIDENCE_THRESHOLD: float = 0.5
+
+    # Kendall uncertainty weighting (V4: clamped to [-2, 2])
+    USE_KENDALL: bool = True
+    KENDALL_LR: float = 1e-4
 
     # ── Data loading ───────────────────────────────────────────────────
     NUM_WORKERS: int = 4

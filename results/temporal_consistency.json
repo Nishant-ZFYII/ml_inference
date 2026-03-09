@@ -1,0 +1,136 @@
+{
+  "corridor": {
+    "L": {
+      "n_frames": 5688,
+      "duration_s": 2103.1,
+      "update_hz": 2.7,
+      "mean_occupied": 2650.6,
+      "occ_jitter_mean": 16.1,
+      "occ_jitter_std": 82.3,
+      "occ_jitter_max": 3460,
+      "occ_jitter_normalized_pct": 0.61,
+      "centroid_drift_mean_m": 0.0007,
+      "centroid_drift_std_m": 0.0027,
+      "centroid_drift_max_m": 0.0981
+    },
+    "L+S": {
+      "n_frames": 5189,
+      "duration_s": 1702.3,
+      "update_hz": 3.0,
+      "mean_occupied": 2683.6,
+      "occ_jitter_mean": 14.8,
+      "occ_jitter_std": 79.7,
+      "occ_jitter_max": 3460,
+      "occ_jitter_normalized_pct": 0.55,
+      "centroid_drift_mean_m": 0.0006,
+      "centroid_drift_std_m": 0.0028,
+      "centroid_drift_max_m": 0.0981
+    },
+    "L+D": {
+      "n_frames": 3681,
+      "duration_s": 1260.5,
+      "update_hz": 2.9,
+      "mean_occupied": 2833.6,
+      "occ_jitter_mean": 12.3,
+      "occ_jitter_std": 67.0,
+      "occ_jitter_max": 3460,
+      "occ_jitter_normalized_pct": 0.43,
+      "centroid_drift_mean_m": 0.0005,
+      "centroid_drift_std_m": 0.0029,
+      "centroid_drift_max_m": 0.0981
+    },
+    "D": {
+      "n_frames": 2534,
+      "duration_s": 921.2,
+      "update_hz": 2.7,
+      "mean_occupied": 2705.9,
+      "occ_jitter_mean": 10.9,
+      "occ_jitter_std": 32.7,
+      "occ_jitter_max": 832,
+      "occ_jitter_normalized_pct": 0.4,
+      "centroid_drift_mean_m": 0.0004,
+      "centroid_drift_std_m": 0.0025,
+      "centroid_drift_max_m": 0.0981
+    },
+    "L+D+dyn": {
+      "n_frames": 904,
+      "duration_s": 231.7,
+      "update_hz": 3.9,
+      "mean_occupied": 3740.4,
+      "occ_jitter_mean": 11.6,
+      "occ_jitter_std": 26.3,
+      "occ_jitter_max": 685,
+      "occ_jitter_normalized_pct": 0.31,
+      "centroid_drift_mean_m": 0.0004,
+      "centroid_drift_std_m": 0.0005,
+      "centroid_drift_max_m": 0.0063
+    }
+  },
+  "lilocbench": {
+    "L": {
+      "n_frames": 749,
+      "duration_s": 191.6,
+      "update_hz": 3.9,
+      "mean_occupied": 953.3,
+      "occ_jitter_mean": 10.0,
+      "occ_jitter_std": 10.6,
+      "occ_jitter_max": 98,
+      "occ_jitter_normalized_pct": 1.05,
+      "centroid_drift_mean_m": 0.0016,
+      "centroid_drift_std_m": 0.0015,
+      "centroid_drift_max_m": 0.0133
+    },
+    "L+S": {
+      "n_frames": 725,
+      "duration_s": 184.4,
+      "update_hz": 3.9,
+      "mean_occupied": 1033.2,
+      "occ_jitter_mean": 8.6,
+      "occ_jitter_std": 11.6,
+      "occ_jitter_max": 94,
+      "occ_jitter_normalized_pct": 0.83,
+      "centroid_drift_mean_m": 0.0015,
+      "centroid_drift_std_m": 0.0021,
+      "centroid_drift_max_m": 0.0345
+    },
+    "L+D": {
+      "n_frames": 2189,
+      "duration_s": 556.0,
+      "update_hz": 3.9,
+      "mean_occupied": 2003.7,
+      "occ_jitter_mean": 26.5,
+      "occ_jitter_std": 59.5,
+      "occ_jitter_max": 950,
+      "occ_jitter_normalized_pct": 1.32,
+      "centroid_drift_mean_m": 0.0013,
+      "centroid_drift_std_m": 0.0026,
+      "centroid_drift_max_m": 0.054
+    },
+    "D": {
+      "n_frames": 2108,
+      "duration_s": 543.5,
+      "update_hz": 3.9,
+      "mean_occupied": 3110.8,
+      "occ_jitter_mean": 31.8,
+      "occ_jitter_std": 80.0,
+      "occ_jitter_max": 873,
+      "occ_jitter_normalized_pct": 1.02,
+      "centroid_drift_mean_m": 0.0012,
+      "centroid_drift_std_m": 0.003,
+      "centroid_drift_max_m": 0.0637
+    },
+    "L+D+dyn": {
+      "n_frames": 2050,
+      "duration_s": 526.8,
+      "update_hz": 3.9,
+      "mean_occupied": 2107.0,
+      "occ_jitter_mean": 37.8,
+      "occ_jitter_std": 73.5,
+      "occ_jitter_max": 891,
+      "occ_jitter_normalized_pct": 1.8,
+      "centroid_drift_mean_m": 0.0017,
+      "centroid_drift_std_m": 0.0033,
+      "centroid_drift_max_m": 0.0673
+    }
+  }
+}

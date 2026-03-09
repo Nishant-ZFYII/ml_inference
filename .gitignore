@@ -10,6 +10,7 @@ build/
 data/
 corridor_data/
 corridor_eval_data/
+lilocbench_extracted/
 *.tar.gz
 
 # Training outputs

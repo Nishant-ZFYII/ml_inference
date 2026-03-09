@@ -1,0 +1,62 @@
+{
+  "Baseline": {
+    "iou": 1.0,
+    "lethal_iou": 1.0,
+    "detection_rate": 1.0,
+    "false_positive_rate": 0.0,
+    "clearance_pred_m": 0.2492002294834689,
+    "clearance_gt_m": 0.2492002294834689,
+    "radius": 0.09000000000000001,
+    "timing_ms": 17.71108776915307,
+    "radius_std": 1.3877787807814457e-17,
+    "n_frames": 459
+  },
+  "A1": {
+    "iou": 1.0,
+    "lethal_iou": 1.0,
+    "detection_rate": 1.0,
+    "false_positive_rate": 0.0,
+    "clearance_pred_m": 0.2492002294834689,
+    "clearance_gt_m": 0.2492002294834689,
+    "radius": 0.17736400954167586,
+    "timing_ms": 56.9475574950507,
+    "radius_std": 0.004675044141054482,
+    "n_frames": 459
+  },
+  "A2": {
+    "iou": 0.37906382708370606,
+    "lethal_iou": 0.2945356932046169,
+    "detection_rate": 1.0,
+    "false_positive_rate": 0.052464887168086276,
+    "clearance_pred_m": 0.17088408873259486,
+    "clearance_gt_m": 0.2492002294834689,
+    "radius": 0.09000000000000001,
+    "timing_ms": 89.80490543224194,
+    "radius_std": 1.3877787807814457e-17,
+    "n_frames": 459
+  },
+  "A3": {
+    "iou": 0.37906382708370606,
+    "lethal_iou": 0.2945356932046169,
+    "detection_rate": 1.0,
+    "false_positive_rate": 0.052464887168086276,
+    "clearance_pred_m": 0.17088408873259486,
+    "clearance_gt_m": 0.2492002294834689,
+    "radius": 0.17736400954167586,
+    "timing_ms": 128.8100197943727,
+    "radius_std": 0.004675044141054482,
+    "n_frames": 459
+  },
+  "A4": {
+    "iou": 0.2787983839125519,
+    "lethal_iou": 0.2261154551095144,
+    "detection_rate": 0.7668825013269206,
+    "false_positive_rate": 0.052464887168086276,
+    "clearance_pred_m": 0.17469562816068634,
+    "clearance_gt_m": 0.2492002294834689,
+    "radius": 0.16469536187223718,
+    "timing_ms": 124.80405265209721,
+    "radius_std": 0.021455133773988447,
+    "n_frames": 459
+  }
+}

@@ -3624,39 +3624,80 @@ environment.
 
 \textbf{4.\ Summary of results}
 
-\emph{Pending — results will be available after HPC job completes.}
-The script computes per-image RMSE and aggregates mean $\pm$ std
-with 95\% CI.  Expected DA3-Small NYU RMSE is $\sim$0.296\,m based
-on published benchmarks, though our val split may differ slightly from
-the standard Eigen 654-image test set.
+HPC job completed successfully on L40S GPU (290 val images,
+65\,ms/img, 15.3\,FPS).  DA3-Small (relative depth, per-image
+median-scaled) on our random 20\% val split:
+
+\begin{center}
+\begin{tabular}{lrrl}
+\toprule
+\textbf{Metric} & \textbf{Mean} & \textbf{$\pm$\,95\% CI} & \\
+\midrule
+RMSE     & 0.513 & $\pm$\,0.038 & m \\
+MAE      & 0.328 & $\pm$\,0.025 & m \\
+AbsRel   & 0.124 & $\pm$\,0.008 &   \\
+$\delta<1.25$  & 85.2\%  & $\pm$\,1.55 & \\
+$\delta<1.25^2$ & 95.3\% & $\pm$\,0.67 & \\
+$\delta<1.25^3$ & 98.2\% & $\pm$\,0.33 & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Note on published vs.\ our RMSE}: The published DA3-Small NYU
+benchmark reports $\sim$0.296\,m, but that is on the standard Eigen
+654-image test split with center crop and scene-based train/test
+separation.  Our evaluation uses a \emph{random 20\% val split}
+(290 images, seed\,=\,42) from the full 1449 labelled NYU set with
+no Eigen crop.  This is the \emph{same val split} used to compute
+every student's NYU RMSE in Table~VII (V3\,=\,1.160, V4\,=\,0.774,
+V5\,=\,0.572, V6\,=\,0.510, V7\,=\,1.315), so the DA3-Small
+teacher row at 0.513\,m is the correct apples-to-apples baseline.
+V6 (0.510\,m) has essentially matched the teacher on this split.
 
 \textbf{5.\ Which table does this fall into?}
 
-Table~VII (\texttt{tab:distillation}) — new teacher row:
-\texttt{DA3-Small \& --- \& X.XXX\textbackslash,m \& --- \& ---
-  \& Teacher (rel.\ depth)}.
+Table~VII (\texttt{tab:distillation}) in
+\texttt{Research Paper v1.tex} — new teacher row:
+
+\texttt{DA3-Small \& ---  \& 0.513\textbackslash,m \& --- \& ---
+  \& Teacher (rel.\ depth) \textbackslash\textbackslash}
+
+With 95\% CI:
+
+\texttt{DA3-Small \& ---  \& 0.513 \$\textbackslash pm\$
+  0.038\textbackslash,m \& --- \& ---
+  \& Teacher (rel.\ depth) \textbackslash\textbackslash}
 
 \textbf{6.\ Python files used}
 
 \begin{itemize}
   \item \texttt{ml\_pipeline/eval\_nyu\_da3.py} — standalone DA3
-    NYU evaluation script (new)
+    NYU evaluation script (new, committed 13fb0f8)
   \item \texttt{ml\_pipeline/eval\_nyu\_da3.slurm} — SLURM job
-    submission script (new)
+    submission script (new, committed 13fb0f8)
 \end{itemize}
 
 \textbf{7.\ Where are the test results saved?}
 
-On HPC at
-\texttt{\$SCRATCH/nyu\_depth\_v2/nyu\_da3\_eval/}.
-After the job finishes, download to local via:
-\texttt{scp np3129@dtn.torch.hpc.nyu.edu:%
-  \$SCRATCH/nyu\_depth\_v2/nyu\_da3\_eval/*.json .}
+\begin{itemize}
+  \item HPC:
+    \texttt{\$SCRATCH/nyu\_depth\_v2/nyu\_da3\_eval/%
+      nyu\_da3\_da3-small\_val.json} (aggregate)
+  \item HPC:
+    \texttt{\$SCRATCH/nyu\_depth\_v2/nyu\_da3\_eval/%
+      nyu\_da3\_da3-small\_val\_per\_image.csv} (per-image)
+  \item Local (SCP'd):
+    \texttt{ml\_pipeline/results/nyu\_da3\_da3-small\_val.json}
+  \item Local (SCP'd):
+    \texttt{ml\_pipeline/results/nyu\_da3\_da3-small\_val\_per\_image.csv}
+\end{itemize}
 
 \textbf{8.\ What dataset was used for generating these results?}
 
 NYU Depth V2 (0jl/NYUv2 from HuggingFace, 1449 labelled images,
-20\% val split).  The primary rosbag
+random 20\% val split = 290 images, seed\,=\,42).  This is the same
+val split used for all student training-time NYU RMSE values in
+Table~VII.  The primary rosbag
 \texttt{rgbd\_imu\_20260302\_174745} (81\,s, 8\,GB) is not used for
 this task — NYU evaluation uses the standard indoor benchmark dataset
 only.
@@ -3664,8 +3705,125 @@ only.
 \textbf{9.\ Which paper table is being filled with values?}
 
 Table~VII (\texttt{tab:distillation}) in
-\texttt{Research Paper v1.tex}.  The DA3-Small NYU RMSE value
-(mean $\pm$ 95\% CI) will be inserted as a new teacher row once the
-HPC job completes and results are downloaded.
+\texttt{Research Paper v1.tex}.  The DA3-Small NYU RMSE =
+0.513 $\pm$ 0.038\,m (95\% CI) will be inserted as a new teacher
+row.  This value is internally consistent with all student rows in
+the same table (same val split, same evaluation protocol).  No
+$\pm$ std values replace existing student rows — only a new row is
+added.
+
+% ====================================================================
+%  2026-02-27 — DA3-Small NYU RMSE Discrepancy Note (for paper text)
+% ====================================================================
+
+\subsection*{Important Note: DA3-Small NYU RMSE — Why 0.513\,m Not
+  0.296\,m (2026-02-27)}
+
+This note documents why the DA3-Small RMSE on our NYU val split
+(0.513\,m) differs from the published benchmark ($\sim$0.296\,m),
+and why the difference does \emph{not} invalidate Table~VII.
+
+\textbf{Different test sets.}  The published DA3-Small benchmark
+($\sim$0.296\,m) is evaluated on the standard Eigen test split —
+654 specific images from held-out scenes, with a centre crop that
+removes border artefacts and scene-based train/test separation.
+Our evaluation uses a \emph{random 20\% val split} (290 images,
+seed\,=\,42) from the full 1449 labelled NYU set, with no Eigen
+crop and no scene-based separation.
+
+\textbf{Internal consistency is what matters.}  In Table~VII, every
+student NYU RMSE value (V3\,=\,1.160, V4\,=\,0.774, V5\,=\,0.572,
+V6\,=\,0.510, V7\,=\,1.315) was computed on this \emph{exact same
+290-image val split} during training.  So the DA3-Small teacher row
+at 0.513\,m is the correct apples-to-apples comparison.
+
+\textbf{The table's story.}  Table~VII shows ``how close does each
+student get to the teacher?''  On our val split:
+DA3-Small\,=\,0.513\,m, best student V6\,=\,0.510\,m — V6 has
+essentially matched the teacher.  Using the published 0.296\,m
+would be comparing different test sets and would be misleading.
+
+\textbf{Recommendation for paper text.}  When presenting Table~VII,
+add a footnote or parenthetical noting that the teacher RMSE is on
+the same val split used for student training-time validation, not
+the standard Eigen test split.
+
+% ====================================================================
+%  2026-02-27 — Reference Verification: DA3 and MonoNav
+% ====================================================================
+
+\subsection*{Reference Verification: DA3 arXiv Entry and MonoNav
+  (2026-02-27)}
+
+\textbf{1.\ Why are we doing this?}
+
+The plan identified two references requiring verification:
+(a)~Ref~\texttt{[da3]} — DA3 arXiv ID, author, and title;
+(b)~Ref~\texttt{[4]} MonoNav — year and venue.  Incorrect
+references would be caught by reviewers and harm credibility.
+
+\textbf{2.\ How / what dataset?}
+
+Manual cross-reference of the \texttt{\textbackslash bibitem\{da3\}}
+entry in \texttt{Research Paper v1.tex} against the actual arXiv
+page.  No dataset or rosbag involved.
+
+\textbf{3.\ Where is this being saved?}
+
+Changes are made directly to \texttt{Research Paper v1.tex}
+(bibliography section).
+
+\textbf{4.\ Summary of results}
+
+\textbf{DA3 reference — CORRECTED.}  The paper cited
+\texttt{arXiv:2501.12928} which is actually an astrophysics paper
+(``BayesEoR: Bayesian 21-cm Power Spectrum Estimation'') —
+\emph{completely unrelated}.  The correct DA3 paper is:
+
+\begin{itemize}
+  \item \textbf{arXiv:} 2511.10647 (submitted 13 Nov 2025)
+  \item \textbf{Title:} ``Depth Anything 3: Recovering the Visual
+    Space from Any Views''
+  \item \textbf{First author:} H.~Lin (not B.~Yang — Yang was
+    first author on DA1/DA2)
+  \item \textbf{Year:} 2025
+\end{itemize}
+
+The \texttt{\textbackslash bibitem\{da3\}} was updated from:\\
+\texttt{B.~Yang et al., ``Depth Anything V3,''
+  arXiv:2501.12928, 2025.}\\
+to:\\
+\texttt{H.~Lin et al., ``Depth Anything 3: Recovering the Visual
+  Space from Any Views,'' arXiv:2511.10647, 2025.}
+
+\textbf{MonoNav — NOT IN v1.tex.}  The ``[4] MonoNav'' verification
+was from the earlier ChatGPT-reviewed PDF draft.
+\texttt{Research Paper v1.tex} does not cite MonoNav anywhere, so
+no action is needed.  (For reference: MonoNav is
+arXiv:2311.14100, ISER 2023, by N.~Simon et al.)
+
+\textbf{5.\ Which table does this fall into?}
+
+No table — bibliography fix only.
+
+\textbf{6.\ Python files used}
+
+None.  Manual text verification and edit.
+
+\textbf{7.\ Where are the test results saved?}
+
+No computational results.  The fix is in
+\texttt{Research Paper v1.tex}, bibliography section.
+
+\textbf{8.\ What dataset was used?}
+
+None.  The primary rosbag
+\texttt{rgbd\_imu\_20260302\_174745} (81\,s, 8\,GB) was not used.
+
+\textbf{9.\ Which paper table is being filled?}
+
+No table.  The bibliography entry \texttt{\textbackslash bibitem\{da3\}}
+in \texttt{Research Paper v1.tex} was corrected (wrong arXiv ID
+and wrong first author).
 
 \end{document}
