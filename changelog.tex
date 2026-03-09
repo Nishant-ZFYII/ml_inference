@@ -3826,4 +3826,255 @@ No table.  The bibliography entry \texttt{\textbackslash bibitem\{da3\}}
 in \texttt{Research Paper v1.tex} was corrected (wrong arXiv ID
 and wrong first author).
 
+% ====================================================================
+%  2026-02-27 — Vivek's V6 / V6.2 / V8 / V9 HPC Training Runs
+% ====================================================================
+
+\subsection*{Vivek's HPC Training Runs: V6, V6.2, V8, V9 (2026-02-27)}
+
+\textbf{1.\ Why were these runs done?}
+
+V5 was the baseline student.  V7 showed that corridor fine-tuning
+improves corridor depth but causes catastrophic forgetting on NYU.
+Vivek ran three follow-up experiments to find a better training
+strategy:
+
+\begin{enumerate}
+  \item \textbf{V6 (finetune):} Pretrain on SUN RGB-D + DIODE (broader
+    indoor depth), then fine-tune on NYU.
+    \emph{Question: does a richer pretraining stage produce a better
+    general-purpose student?}
+  \item \textbf{V6.2:} A variant of V6 (exact config to be confirmed
+    with Vivek).
+  \item \textbf{V8 (mixed):} Start from V5, train on NYU + LILocBench
+    corridor mixed 1:1.  Validate on NYU only.
+    \emph{Question: can one checkpoint handle both domains without
+    forgetting?}
+  \item \textbf{V9 (V6$\to$corridor):} Start from V6, fine-tune on
+    LILocBench corridor only for 50 epochs.
+    \emph{Question: is V6 a better warm-start than V5 for corridor
+    specialization?}
+\end{enumerate}
+
+\textbf{2.\ How / what dataset?}
+
+All training on NYU Torch HPC (L40S GPU), run by Vivek (vm2677).
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lllr}
+\toprule
+\textbf{Version} & \textbf{Start Checkpoint} & \textbf{Train Data}
+  & \textbf{Epochs} \\
+\midrule
+V6 finetune & SUN+DIODE pretrained ckpt & NYU only & 200 \\
+V6.2        & (V6 variant, config TBD)  & --- & --- \\
+V8 mixed    & V5 best\_depth.pt         & NYU + LILocBench (1:1) & 50 \\
+V9 corridor & V6 best\_depth.pt         & LILocBench only & 50 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+SLURM scripts: \texttt{train\_v6\_finetune.slurm},
+\texttt{train\_v8\_mixed.slurm}, \texttt{train\_v9.slurm}.\\
+Mixed-dataset loader: \texttt{dataset/nyu\_lilocbench\_loader.py}.
+
+\textbf{3.\ Where are checkpoints saved?}
+
+Local: \texttt{hpc\_outputs/best\_depth\_v\{6, 6.2, 8, 9\}.pt}.\\
+HPC: \texttt{\$SCRATCH/checkpoints\_v6/},
+\texttt{\$SCRATCH/checkpoints\_v8\_mixed/},
+\texttt{\$SCRATCH/checkpoints\_v9\_corridor\_from\_v6/}.
+
+\textbf{4.\ Summary of HPC results (Vivek's NYU evaluation)}
+
+Evaluated on NYU val set (290 images, same 80/20 split as all students):
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrrrrl}
+\toprule
+\textbf{Model} & \textbf{NYU RMSE} & \textbf{$\delta{<}1.25$}
+  & \textbf{mIoU} & \textbf{LILoc RMSE} & \textbf{Note} \\
+\midrule
+V5 baseline        & 0.572\,m & 68.5\% & 63.7\% & ---
+  & General baseline \\
+V6 (finetune)      & 0.519\,m & 85.6\% & 48.5\% & ---
+  & Best NYU depth \\
+V7 (V5$\to$corr)   & 1.315\,m & 21.0\% & 47.5\% & 0.445\,m
+  & Catastrophic forgetting \\
+V8 (mixed)         & $\sim$V5 & ---    & ---    & ---
+  & Compromise attempt \\
+V9 (V6$\to$corr)   & 1.553\,m & 17.3\% & 31.6\% & \textbf{0.382\,m}
+  & Best LILoc, worst NYU \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+V9 key finding: V6 is a stronger warm-start for corridor specialization
+(LILocBench RMSE 0.382\,m vs V7's 0.445\,m), but causes worse
+catastrophic forgetting (NYU RMSE 1.553\,m vs 1.315\,m).
+
+\textbf{5.\ Which table?}
+
+Table~VII (\texttt{tab:distillation}) in \texttt{Research Paper v1.tex}.
+
+\textbf{6.\ Python files used}
+
+\texttt{train.py}, SLURM scripts above,
+\texttt{dataset/nyu\_lilocbench\_loader.py}.
+
+\textbf{7.\ Where are results saved?}
+
+Vivek's SLURM output logs on HPC.  Checkpoints SCP'd to local
+\texttt{hpc\_outputs/}.
+
+\textbf{8.\ What dataset / rosbag?}
+
+Training data: NYU Depth V2, LILocBench corridor.
+\textbf{No rosbag used} --- these are HPC training runs, not corridor
+replay evaluations.  The 81\,s rosbag
+\texttt{rgbd\_imu\_20260302\_174745} was \textbf{not} used here.
+
+\textbf{9.\ Paper table being filled}
+
+No paper values inserted from this entry.  The next entry (corridor
+depth evaluation) benchmarks these checkpoints against our deployment
+corridor data.
+
+% ====================================================================
+%  2026-02-27 — Corridor Depth Evaluation: V6, V6.2, V8, V9
+% ====================================================================
+
+\subsection*{Corridor Depth Evaluation: V6, V6.2, V8, V9 (2026-02-27)}
+
+\textbf{1.\ Why are we doing this test?}
+
+Vivek claims V9 is the best corridor model and V6 is a better warm-start
+than V5.  We need to verify this on our own corridor benchmark --- the
+same 459-frame dataset used for all prior results (V4, V7, DA3-Small,
+FPR audit, near-range safety) so the comparison is fair.
+
+\textbf{2.\ How / what dataset?}
+
+Script: \texttt{eval\_corridor\_depth.py} run on local CPU
+(GTX 1060 CUDA incompatible with current PyTorch; CPU works fine).\\
+No \texttt{--imagenet-norm} flag --- these models have internal
+ImageNet normalization buffers (\texttt{img\_mean}/\texttt{img\_std}),
+so external normalization would cause double-normalization.
+
+Dataset: \textbf{459 corridor frames} from
+\texttt{corridor\_eval\_data/manifest.jsonl}.\\
+Source rosbag: \texttt{rgbd\_imu\_20260228\_003828\_0.mcap} (the
+\textbf{older} corridor recording).\\
+\textbf{NOT} the 81\,s rosbag \texttt{rgbd\_imu\_20260302\_174745}
+(8\,GB).  We used the established 459-frame benchmark so all results
+are comparable to V4, V7, DA3-Small, and everything already in the
+paper.
+
+Ground truth: Orbbec Femto Bolt sensor depth, valid range
+$[0.1, 5.0]$\,m.
+
+\textbf{3.\ Where are results saved?}
+
+\texttt{/tmp/eval\_v6\_results.log}\\
+\texttt{/tmp/eval\_v6.2\_results.log}\\
+\texttt{/tmp/eval\_v8\_results.log}\\
+\texttt{/tmp/eval\_v9\_results.log}
+
+\textbf{4.\ Summary of results}
+
+Complete corridor benchmark comparison across all student versions:
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrrrrl}
+\toprule
+\textbf{Model} & \textbf{RMSE} & \textbf{MAE}
+  & \textbf{AbsRel} & \textbf{$\delta{<}1.25$} & \textbf{Strategy} \\
+\midrule
+V4 (EB1, Vivek)     & 1.373\,m & 0.810\,m & 1.401 & 16.3\%
+  & General (prior) \\
+V5 (EB1)            & 2.186\,m & 2.081\,m & 3.654 &  2.2\%
+  & General baseline \\
+V6 (SUN+DIODE$\to$NYU) & 2.158\,m & 2.046\,m & 3.580 &  2.7\%
+  & Better pretrain \\
+V6.2 (V6 variant)   & 2.102\,m & 1.955\,m & 3.337 &  3.2\%
+  & V6 variant \\
+V7 (V5$\to$corr FT) & 1.982\,m & 1.499\,m & 2.882 &  0.0\%
+  & Corridor specialist \\
+V8 (V5 + mixed)     & 2.266\,m & 2.150\,m & 3.743 &  2.3\%
+  & Mixed (failed) \\
+\textbf{V9 (V6$\to$corr FT)} & \textbf{1.589\,m} & \textbf{0.990\,m}
+  & \textbf{1.669} & \textbf{17.4\%}
+  & \textbf{Best corridor} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Near-range breakdown (0.3--1.0\,m):
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Model} & \textbf{Near RMSE} & \textbf{Near MAE}
+  & \textbf{Near AbsRel} & \textbf{Near $\delta{<}1.25$} \\
+\midrule
+V6              & 2.262\,m & 2.174\,m & 4.477 &  0.0\% \\
+V6.2            & 2.170\,m & 2.046\,m & 4.169 &  0.0\% \\
+V8              & 2.368\,m & 2.272\,m & 4.675 &  0.0\% \\
+\textbf{V9}     & \textbf{1.782\,m} & \textbf{1.096\,m}
+  & \textbf{2.149} & \textbf{11.4\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Key findings:}
+
+\begin{enumerate}
+  \item \textbf{V9 is the best corridor student.}  RMSE 1.589\,m
+    beats V7 (1.982\,m) by 20\%.  V6 is a clearly better warm-start
+    for corridor fine-tuning than V5.
+  \item \textbf{V8 mixed training failed.}  It is actually \emph{worse}
+    than V5 on the corridor (2.266\,m vs 2.186\,m).  The 1:1
+    NYU+corridor mixing did not improve corridor performance.
+  \item \textbf{V6/V6.2 are marginal over V5.}  RMSE 2.10--2.16\,m
+    vs 2.19\,m.  Better pretraining helps NYU RMSE but barely moves
+    the needle on the corridor.
+  \item \textbf{Near-range:} V9 is the only new model with any
+    near-range $\delta{<}1.25$ (11.4\%).  All others are 0\%.
+    Still far below DA3-Small (70.7\%).
+  \item \textbf{Core conclusion holds:} all student models fail at
+    collision-zone depth.  Knowledge distillation does not transfer
+    near-range accuracy from the DA3 teacher.
+\end{enumerate}
+
+\textbf{5.\ Which table?}
+
+Table~VII (\texttt{tab:distillation}) --- corridor RMSE column.
+Also relevant to near-range safety (Table~\texttt{tab:nearrange}).
+
+\textbf{6.\ Python files used}
+
+\texttt{eval\_corridor\_depth.py}.
+
+\textbf{7.\ Where are test results saved?}
+
+See point 3 above.  Results also recorded in this changelog entry.
+
+\textbf{8.\ What dataset / rosbag?}
+
+459-frame corridor benchmark from
+\texttt{corridor\_eval\_data/manifest.jsonl}.  Extracted from
+\texttt{rgbd\_imu\_20260228\_003828\_0.mcap} (\textbf{not} the
+81\,s rosbag).
+
+\textbf{9.\ Paper table being filled}
+
+No values inserted into the paper yet.  Decision needed: should V9
+(best corridor, worst NYU) or V7 (current paper row) be the corridor
+specialist in Table~VII?  Should V6 or V6.2 replace V5 as the general
+row?  These are editorial decisions for the next paper revision.
+
 \end{document}
