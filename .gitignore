@@ -9,6 +9,9 @@ build/
 # Data (downloaded at runtime)
 data/
 corridor_data/
+corridor_eval_data/
+lilocbench_extracted/
+*.tar.gz
 
 # Training outputs
 checkpoints/

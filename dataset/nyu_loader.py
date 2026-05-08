@@ -4,7 +4,7 @@ NYU Depth V2 dataset loader.
 Downloads the labeled split (1449 RGBD pairs) from HuggingFace,
 caches to disk, and provides PyTorch Dataset / DataLoader objects.
 
-When teacher predictions (DA2 depth, YOLO+SAM2 seg) are available via a
+When teacher predictions (DA3 depth, YOLO+SAM2 seg) are available via a
 manifest.jsonl file, those are loaded alongside NYU ground truth so the
 hybrid depth loss can use them.
 """
@@ -39,8 +39,8 @@ class NYUDepthV2Dataset(Dataset):
         depth        : float32 tensor [1, H, W]  in meters
         seg          : int64   tensor [H, W]      class ids {0..5, 255}
         confidence   : float32 tensor [1, H, W]  synthetic confidence
-        da2_depth    : float32 tensor [1, H, W]  (or zeros if unavailable)
-        has_da2      : bool                        whether da2_depth is real
+        da3_depth    : float32 tensor [1, H, W]  (or zeros if unavailable)
+        has_da3      : bool                        whether da3_depth is real
     """
 
     def __init__(
@@ -71,13 +71,19 @@ class NYUDepthV2Dataset(Dataset):
         if data_limit > 0:
             self.indices = self.indices[:data_limit]
 
-        # Load teacher manifest if available
         self._teacher_map: Dict[str, dict] = {}
+        self._manifest_base = None
+        self._warned_missing = False
         if manifest_path and os.path.exists(manifest_path):
+            self._manifest_base = str(Path(manifest_path).parent)
             with open(manifest_path) as f:
                 for line in f:
                     entry = json.loads(line)
                     self._teacher_map[entry["stem"]] = entry
+            covered = sum(1 for i in self.indices
+                          if f"{i:05d}" in self._teacher_map)
+            print(f"Manifest covers {covered}/{len(self.indices)} "
+                  f"{split} samples")
 
     # ── Data caching ───────────────────────────────────────────────────
 
@@ -148,25 +154,42 @@ class NYUDepthV2Dataset(Dataset):
 
         rgb = Image.open(self._cache_dir / "rgb" / f"{stem}.png").convert("RGB")
         depth = np.load(self._cache_dir / "depth" / f"{stem}.npy")
-        seg_raw = np.load(self._cache_dir / "seg" / f"{stem}.npy")
 
-        seg = remap_labels(seg_raw)
-
-        # Synthesize confidence from depth validity (NYU stand-in for ToF confidence)
         confidence = (depth > 0).astype(np.float32)
 
-        # Load DA2 teacher depth if available
-        has_da2 = False
-        da2_depth = np.zeros_like(depth)
-        if stem in self._teacher_map:
-            entry = self._teacher_map[stem]
-            da2_path = entry.get("da2_depth")
-            if da2_path and os.path.exists(da2_path):
-                da2_depth = np.load(da2_path).astype(np.float32)
-                has_da2 = True
+        has_da3 = False
+        da3_depth = np.zeros_like(depth)
 
-        rgb, depth, seg, confidence, da2_depth = self._transform(
-            rgb, depth, seg, confidence, da2_depth
+        if self._manifest_base and stem in self._teacher_map:
+            entry = self._teacher_map[stem]
+
+            da3_rel = entry.get("da3_depth")
+            if da3_rel:
+                da3_path = os.path.join(self._manifest_base, da3_rel)
+                if os.path.exists(da3_path):
+                    da3_depth = np.load(da3_path).astype(np.float32)
+                    has_da3 = True
+
+            sam2_rel = entry.get("sam2_seg")
+            if sam2_rel:
+                sam2_path = os.path.join(self._manifest_base, sam2_rel)
+                if os.path.exists(sam2_path):
+                    seg = np.load(sam2_path).astype(np.int32)
+                else:
+                    seg = self._fallback_seg(stem)
+            else:
+                seg = self._fallback_seg(stem)
+        elif self._manifest_base:
+            if not self._warned_missing:
+                print(f"WARNING: sample {stem} not in manifest -- "
+                      f"using NYU GT fallback. Run teacher inference on all images.")
+                self._warned_missing = True
+            seg = self._fallback_seg(stem)
+        else:
+            seg = self._fallback_seg(stem)
+
+        rgb, depth, seg, confidence, da3_depth = self._transform(
+            rgb, depth, seg, confidence, da3_depth
         )
 
         return {
@@ -174,9 +197,14 @@ class NYUDepthV2Dataset(Dataset):
             "depth": depth,
             "seg": seg,
             "confidence": confidence,
-            "da2_depth": da2_depth,
-            "has_da2": has_da2,
+            "da3_depth": da3_depth,
+            "has_da3": has_da3,
         }
+
+    def _fallback_seg(self, stem: str) -> np.ndarray:
+        """Load NYU remapped seg labels as fallback when SAM2 is unavailable."""
+        seg_raw = np.load(self._cache_dir / "seg" / f"{stem}.npy")
+        return remap_labels(seg_raw)
 
     # ── Transforms ─────────────────────────────────────────────────────
 
@@ -186,28 +214,25 @@ class NYUDepthV2Dataset(Dataset):
         depth: np.ndarray,
         seg: np.ndarray,
         confidence: np.ndarray,
-        da2_depth: np.ndarray,
+        da3_depth: np.ndarray,
     ) -> Tuple[torch.Tensor, ...]:
         """Resize, augment, and convert to tensors."""
         w, h = rgb.size
 
         if self.augment:
-            # Random horizontal flip
             if random.random() > 0.5:
                 rgb = rgb.transpose(Image.FLIP_LEFT_RIGHT)
                 depth = np.fliplr(depth).copy()
                 seg = np.fliplr(seg).copy()
                 confidence = np.fliplr(confidence).copy()
-                da2_depth = np.fliplr(da2_depth).copy()
+                da3_depth = np.fliplr(da3_depth).copy()
 
-            # Color jitter (RGB only)
             from torchvision import transforms as T
             jitter = T.ColorJitter(
                 brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1
             )
             rgb = jitter(rgb)
 
-            # Random crop (if image is larger than target)
             if h > self.height and w > self.width:
                 top = random.randint(0, h - self.height)
                 left = random.randint(0, w - self.width)
@@ -215,20 +240,19 @@ class NYUDepthV2Dataset(Dataset):
                 depth = depth[top:top + self.height, left:left + self.width]
                 seg = seg[top:top + self.height, left:left + self.width]
                 confidence = confidence[top:top + self.height, left:left + self.width]
-                da2_depth = da2_depth[top:top + self.height, left:left + self.width]
+                da3_depth = da3_depth[top:top + self.height, left:left + self.width]
             else:
                 rgb = rgb.resize((self.width, self.height), Image.BILINEAR)
                 depth = _resize_np(depth, self.height, self.width)
                 seg = _resize_np(seg, self.height, self.width, order=0)
                 confidence = _resize_np(confidence, self.height, self.width)
-                da2_depth = _resize_np(da2_depth, self.height, self.width)
+                da3_depth = _resize_np(da3_depth, self.height, self.width)
         else:
-            # Validation: simple resize
             rgb = rgb.resize((self.width, self.height), Image.BILINEAR)
             depth = _resize_np(depth, self.height, self.width)
             seg = _resize_np(seg, self.height, self.width, order=0)
             confidence = _resize_np(confidence, self.height, self.width)
-            da2_depth = _resize_np(da2_depth, self.height, self.width)
+            da3_depth = _resize_np(da3_depth, self.height, self.width)
 
         # To tensors
         rgb_t = torch.from_numpy(
@@ -237,9 +261,9 @@ class NYUDepthV2Dataset(Dataset):
         depth_t = torch.from_numpy(depth[np.newaxis].astype(np.float32))
         seg_t = torch.from_numpy(seg.astype(np.int64))
         conf_t = torch.from_numpy(confidence[np.newaxis].astype(np.float32))
-        da2_t = torch.from_numpy(da2_depth[np.newaxis].astype(np.float32))
+        da3_t = torch.from_numpy(da3_depth[np.newaxis].astype(np.float32))
 
-        return rgb_t, depth_t, seg_t, conf_t, da2_t
+        return rgb_t, depth_t, seg_t, conf_t, da3_t
 
 
 def _resize_np(arr: np.ndarray, h: int, w: int, order: int = 1) -> np.ndarray:

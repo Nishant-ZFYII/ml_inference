@@ -6,7 +6,7 @@ It expects data collected from the physical Ackermann robot with:
     - RGB images from the Orbbec Femto Bolt
     - ToF depth maps (.npy, float32, meters)
     - ToF confidence maps (.npy, float32, 0-1)
-    - DA2-Large teacher depth predictions (.npy, float32, meters)
+    - DA3-Metric-Large teacher depth predictions (.npy, float32, meters)
     - YOLO+SAM2 teacher segmentation labels (.npy, uint8, 6-class)
 
 All file associations come from a manifest.jsonl produced by
@@ -17,13 +17,13 @@ Expected directory layout:
         rgb/            *.png    (320x240 or larger, will be resized)
         depth/          *.npy    (float32, metric meters)
         confidence/     *.npy    (float32, 0.0 – 1.0)
-        da2_depth/      *.npy    (float32, metric meters)
+        da3_depth/      *.npy    (float32, metric meters)
         sam2_seg/       *.npy    (uint8, values 0–5)
         manifest.jsonl           (one JSON object per line)
 
 To populate this:
     1. Collect RGB + ToF data on the robot
-    2. Run teacher_infer/run_da2.py on HPC
+    2. Run teacher_infer/run_da3.py on HPC (with Femto Bolt --fx/--fy)
     3. Run teacher_infer/run_sam2.py on HPC
     4. Run teacher_infer/build_manifest.py
     5. Set USE_CORRIDOR_DATA = True in config.py
@@ -98,13 +98,12 @@ class CorridorDataset(Dataset):
         else:
             confidence = (depth > 0).astype(np.float32)
 
-        # DA2 teacher depth
-        da2_path = entry.get("da2_depth")
-        has_da2 = False
-        da2_depth = np.zeros_like(depth)
-        if da2_path and os.path.exists(self.base_dir / da2_path):
-            da2_depth = np.load(self.base_dir / da2_path).astype(np.float32)
-            has_da2 = True
+        da3_path = entry.get("da3_depth")
+        has_da3 = False
+        da3_depth = np.zeros_like(depth)
+        if da3_path and os.path.exists(self.base_dir / da3_path):
+            da3_depth = np.load(self.base_dir / da3_path).astype(np.float32)
+            has_da3 = True
 
         # YOLO+SAM2 teacher segmentation
         seg_path = entry.get("sam2_seg")
@@ -118,7 +117,7 @@ class CorridorDataset(Dataset):
         rgb = rgb.resize((self.width, self.height), Image.BILINEAR)
         depth = _resize_np(depth, self.height, self.width)
         confidence = _resize_np(confidence, self.height, self.width)
-        da2_depth = _resize_np(da2_depth, self.height, self.width)
+        da3_depth = _resize_np(da3_depth, self.height, self.width)
         seg = _resize_np(seg.astype(np.float32), self.height, self.width, order=0).astype(np.int64)
 
         # Augmentation
@@ -129,7 +128,7 @@ class CorridorDataset(Dataset):
                 depth = np.fliplr(depth).copy()
                 seg = np.fliplr(seg).copy()
                 confidence = np.fliplr(confidence).copy()
-                da2_depth = np.fliplr(da2_depth).copy()
+                da3_depth = np.fliplr(da3_depth).copy()
 
             from torchvision import transforms as T
             rgb = T.ColorJitter(0.2, 0.2, 0.2, 0.1)(rgb)
@@ -141,15 +140,15 @@ class CorridorDataset(Dataset):
         depth_t = torch.from_numpy(depth[np.newaxis].astype(np.float32))
         seg_t = torch.from_numpy(seg.astype(np.int64))
         conf_t = torch.from_numpy(confidence[np.newaxis].astype(np.float32))
-        da2_t = torch.from_numpy(da2_depth[np.newaxis].astype(np.float32))
+        da3_t = torch.from_numpy(da3_depth[np.newaxis].astype(np.float32))
 
         return {
             "rgb": rgb_t,
             "depth": depth_t,
             "seg": seg_t,
             "confidence": conf_t,
-            "da2_depth": da2_t,
-            "has_da2": has_da2,
+            "da3_depth": da3_t,
+            "has_da3": has_da3,
         }
 
 

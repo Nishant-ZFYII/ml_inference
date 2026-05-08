@@ -12,10 +12,11 @@
 #SBATCH --error=%x-%j.err
 
 # ============================================================================
-# Student Model Training on NYU Torch HPC
+# EfficientViT-B1 Student Model Training on NYU Torch HPC
 #
+# Trains multi-task student (depth + seg) distilled from DA3-Metric-Large
+# and YOLO+SAM2 teachers.
 # Using L40S public partition (48GB VRAM, sufficient for student training).
-# Request tandon_advanced allocation at projects.hpc.nyu.edu for H100/H200 access.
 # ============================================================================
 
 set -euo pipefail
@@ -45,13 +46,20 @@ python train.py \
     --data-root "$SCRATCH/nyu_depth_v2" \
     --checkpoint-dir "$SCRATCH/checkpoints" \
     --log-dir "$SCRATCH/runs" \
-    --epochs 100 \
+    --manifest "$SCRATCH/nyu_teacher_data/manifest.jsonl" \
+    --epochs 200 \
+    --lr 3e-4 \
     --batch-size 16 \
-    --num-workers 8
+    --num-workers 8 \
+    --uncertainty-weighting
 
 echo "=== Training complete ==="
-echo "Best checkpoint: $SCRATCH/checkpoints/best.pt"
+echo "Best checkpoints:"
+echo "  Combined: $SCRATCH/checkpoints/best.pt"
+echo "  Depth:    $SCRATCH/checkpoints/best_depth.pt"
+echo "  Seg:      $SCRATCH/checkpoints/best_seg.pt"
 echo ""
 echo "Next steps:"
-echo "  1. Export:    python export_trt.py --checkpoint $SCRATCH/checkpoints/best.pt"
-echo "  2. Evaluate:  python eval_distillation.py --checkpoint $SCRATCH/checkpoints/best.pt --manifest $SCRATCH/nyu_teacher_data/manifest.jsonl"
+echo "  1. Evaluate (combined): python eval_distillation.py --checkpoint $SCRATCH/checkpoints/best.pt --manifest $SCRATCH/nyu_teacher_data/manifest.jsonl"
+echo "  2. Evaluate (depth):    python eval_distillation.py --checkpoint $SCRATCH/checkpoints/best_depth.pt --manifest $SCRATCH/nyu_teacher_data/manifest.jsonl"
+echo "  3. Evaluate (seg):      python eval_distillation.py --checkpoint $SCRATCH/checkpoints/best_seg.pt --manifest $SCRATCH/nyu_teacher_data/manifest.jsonl"
