@@ -8,7 +8,7 @@ and saves side-by-side comparison grids suitable for publication.
 Output layout:
     <output_dir>/
         individual/       per-model depth maps for each frame
-        comparisons/      6-panel grids (RGB, Sensor, DA3, V4, V5, V7)
+        comparisons/      4-col grids (RGB, Sensor, DA3, V4..V9, Fused(S+DA3), Fused(S+V9))
         frames/           extracted RGB + sensor depth PNGs
 
 Usage:
@@ -36,21 +36,42 @@ from config import Config
 from models.student import build_student
 
 
+# All student models use internal ImageNet normalization (no external --imagenet-norm)
 MODELS = {
     "V4": {
         "checkpoint": "hpc_outputs/vivek_v4_best_depth.pt",
-        "imagenet_norm": True,
+        "imagenet_norm": False,
         "label": "V4 (Best Corridor)\nRMSE 1.373m",
     },
     "V5": {
         "checkpoint": "hpc_outputs/best_depth_v5_vivek.pt",
-        "imagenet_norm": True,
+        "imagenet_norm": False,
         "label": "V5 (Best NYU)\nRMSE 0.572m NYU",
+    },
+    "V6": {
+        "checkpoint": "hpc_outputs/best_depth_v6.pt",
+        "imagenet_norm": False,
+        "label": "V6 (SUN+DIODE→NYU)\nRMSE 2.158m corridor",
+    },
+    "V6.2": {
+        "checkpoint": "hpc_outputs/best_depth_v6.2.pt",
+        "imagenet_norm": False,
+        "label": "V6.2 (V6 variant)\nRMSE 2.102m corridor",
     },
     "V7": {
         "checkpoint": "hpc_outputs/best_depth_v7.pt",
-        "imagenet_norm": True,
+        "imagenet_norm": False,
         "label": "V7 (LILocBench FT)\nRMSE 0.445m LILoc",
+    },
+    "V8": {
+        "checkpoint": "hpc_outputs/best_depth_v8.pt",
+        "imagenet_norm": False,
+        "label": "V8 (V5+mixed)\nRMSE 2.266m corridor",
+    },
+    "V9": {
+        "checkpoint": "hpc_outputs/best_depth_v9.pt",
+        "imagenet_norm": False,
+        "label": "V9 (best corridor)\nRMSE 1.589m corridor",
     },
     "Iter6_B1": {
         "checkpoint": "hpc_outputs/best_depth.pt",
@@ -63,7 +84,7 @@ IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
 IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
 
-def extract_frames_from_db3(bag_path: str, num_frames: int):
+def extract_frames_from_db3(bag_path: str, num_frames: int, skip_seconds: float = 0.0):
     """Extract evenly-spaced RGB + depth frames from a db3 rosbag via sqlite3."""
     import sqlite3
     from rosbags.typesys import Stores, get_typestore
@@ -84,7 +105,8 @@ def extract_frames_from_db3(bag_path: str, num_frames: int):
     cursor.execute("SELECT id, name FROM topics")
     topic_map = {name: tid for tid, name in cursor.fetchall()}
     rgb_tid = topic_map.get("/camera/color/image_raw")
-    depth_tid = topic_map.get("/camera/depth/image_raw")
+    depth_tid = (topic_map.get("/camera/depth/image_raw")
+                 or topic_map.get("/camera/depth"))
     if rgb_tid is None or depth_tid is None:
         raise RuntimeError(f"Topics not found. Available: {list(topic_map.keys())}")
 
@@ -95,6 +117,14 @@ def extract_frames_from_db3(bag_path: str, num_frames: int):
         (rgb_tid,),
     )
     all_timestamps = [row[0] for row in cursor.fetchall()]
+
+    if skip_seconds > 0 and len(all_timestamps) > 0:
+        t0 = all_timestamps[0]
+        cutoff = t0 + int(skip_seconds * 1e9)
+        before = len(all_timestamps)
+        all_timestamps = [t for t in all_timestamps if t >= cutoff]
+        print(f"Skipped first {skip_seconds:.0f}s: {before} -> {len(all_timestamps)} frames")
+
     total = len(all_timestamps)
     stride = max(1, total // num_frames)
     print(f"Total RGB frames: {total}, selecting {num_frames} (stride={stride})")
@@ -147,7 +177,8 @@ def extract_frames_from_db3(bag_path: str, num_frames: int):
                 depth = np.frombuffer(dmsg.data, dtype=np.uint16).reshape(dh, dw)
                 depth = depth.astype(np.float32) / 1000.0
             elif denc == "32FC1":
-                depth = np.frombuffer(dmsg.data, dtype=np.float32).reshape(dh, dw)
+                depth = np.frombuffer(dmsg.data, dtype=np.float32).reshape(dh, dw).copy()
+                depth[~np.isfinite(depth)] = 0.0
 
         frames.append({"timestamp": rgb_ts, "rgb": rgb, "depth": depth})
         print(f"  Frame {idx}: ts={rgb_ts}, rgb={w}x{h}, "
@@ -203,9 +234,14 @@ def load_da3_model(device):
 
 
 def run_da3_inference(pipe, rgb_pil):
-    """Run DA3-Small on a PIL image, return relative depth as numpy."""
+    """Run DA3-Small on a PIL image, return float32 depth as numpy."""
     result = pipe(rgb_pil)
-    depth = np.array(result["depth"], dtype=np.float32)
+    # Use predicted_depth (float32 tensor) not depth (uint8 PIL image)
+    raw = result["predicted_depth"]
+    if hasattr(raw, "numpy"):
+        depth = raw.squeeze().numpy().astype(np.float32)
+    else:
+        depth = np.array(raw, dtype=np.float32)
     return depth
 
 
@@ -217,14 +253,24 @@ def apply_colormap(depth, vmin=0.0, vmax=5.0, cmap="inferno"):
     return (colored * 255).astype(np.uint8)
 
 
+# Labels for fused panels (not in MODELS)
+FUSED_LABELS = {
+    "Fused(Sensor+DA3)": "Fused (Sensor + DA3)\nsensor where valid, DA3 fills dead",
+    "Fused(Sensor+V9)": "Fused (Sensor + V9)\nsensor where valid, V9 fills dead",
+}
+
+
 def create_comparison_grid(rgb, sensor_depth, predictions, frame_idx, output_path,
-                           vmin=0.0, vmax=5.0):
+                           vmin=0.0, vmax=5.0,
+                           sensor_label="Sensor Depth (Femto Bolt)",
+                           title_prefix="Corridor Depth Comparison"):
     """
     Create a publication-quality comparison grid.
 
-    Layout: 2 rows x 3 columns
-        Row 1: RGB | Sensor Depth | DA3-Small
-        Row 2: V4  | V5           | V7
+    Layout: 4 columns, multiple rows
+        Row 1: RGB | Sensor Depth | DA3-Small | V4
+        Row 2: V5 | V6 | V6.2 | V7
+        Row 3: V8 | V9 | Fused(Sensor+DA3) | Fused(Sensor+V9)
 
     Each depth panel is normalised to a shared range computed from
     all valid depth values across sensor + predictions, so that DA3
@@ -232,7 +278,7 @@ def create_comparison_grid(rgb, sensor_depth, predictions, frame_idx, output_pat
     """
     n_models = len(predictions)
     n_panels = 2 + n_models
-    ncols = 3
+    ncols = 4
     nrows = (n_panels + ncols - 1) // ncols
 
     # Compute a shared depth range from all panels for this frame
@@ -254,35 +300,48 @@ def create_comparison_grid(rgb, sensor_depth, predictions, frame_idx, output_pat
     else:
         shared_vmin, shared_vmax = vmin, vmax
 
-    fig = plt.figure(figsize=(ncols * 5, nrows * 3.5), dpi=150)
+    fig = plt.figure(figsize=(ncols * 4.5, nrows * 3.2), dpi=150)
     gs = gridspec.GridSpec(nrows, ncols, hspace=0.15, wspace=0.05)
 
     panels = []
-    panels.append(("RGB Input", rgb, "rgb"))
+    panels.append(("RGB Input", rgb, "rgb", None))
 
     if sensor_depth is not None:
         sensor_vis = sensor_depth.copy()
         sensor_vis[sensor_depth == 0] = np.nan
-        panels.append(("Sensor Depth (Femto Bolt)", sensor_vis, "depth"))
+        panels.append((sensor_label, sensor_vis, "depth", None))
     else:
-        panels.append(("Sensor Depth (N/A)", np.zeros((240, 320)), "depth"))
+        panels.append(("Sensor Depth (N/A)", np.zeros((240, 320)), "depth", None))
 
     for name, pred in predictions.items():
-        label = MODELS.get(name, {}).get("label", name)
+        label = MODELS.get(name, {}).get("label", FUSED_LABELS.get(name, name))
         if name == "DA3-Small":
             label = "DA3-Small (Teacher)\nRMSE 0.596m corridor"
-        panels.append((label, pred, "depth"))
+        panels.append((label, pred, "depth", name))
 
-    for i, (title, data, dtype) in enumerate(panels):
+    for i, (title, data, dtype, panel_key) in enumerate(panels):
         row, col = divmod(i, ncols)
         ax = fig.add_subplot(gs[row, col])
 
         if dtype == "rgb":
             ax.imshow(data)
         else:
-            im = ax.imshow(data, cmap="inferno",
-                           vmin=shared_vmin, vmax=shared_vmax,
-                           interpolation="bilinear")
+            # DA3 outputs narrow range (0–1.5m); shared colormap (0–5m) crushes it
+            # into a dark band. Use DA3-specific range so its variation is visible.
+            if panel_key == "DA3-Small":
+                dv = data[(data > 0.05) & (data < 10) & ~np.isnan(data)]
+                if len(dv) > 100:
+                    da3_vmin = max(0.0, float(np.percentile(dv, 1)))
+                    da3_vmax = max(2.0, float(np.percentile(dv, 99)))
+                else:
+                    da3_vmin, da3_vmax = 0.0, 2.0
+                im = ax.imshow(data, cmap="inferno",
+                               vmin=da3_vmin, vmax=da3_vmax,
+                               interpolation="bilinear")
+            else:
+                im = ax.imshow(data, cmap="inferno",
+                               vmin=shared_vmin, vmax=shared_vmax,
+                               interpolation="bilinear")
 
         ax.set_title(title, fontsize=10, fontweight="bold", pad=4)
         ax.axis("off")
@@ -294,7 +353,7 @@ def create_comparison_grid(rgb, sensor_depth, predictions, frame_idx, output_pat
     cbar = fig.colorbar(sm, cax=cbar_ax)
     cbar.set_label("Depth (metres)", fontsize=10)
 
-    fig.suptitle(f"Frame {frame_idx:04d} — Corridor Depth Comparison",
+    fig.suptitle(f"Frame {frame_idx:04d} — {title_prefix}",
                  fontsize=13, fontweight="bold", y=0.98)
 
     plt.savefig(output_path, bbox_inches="tight", pad_inches=0.1)
@@ -315,11 +374,42 @@ def save_individual_depth(depth, name, frame_idx, output_dir, vmin=0.0, vmax=5.0
     return out_path
 
 
+def extract_frames_from_corridor_eval(manifest_path: Path, num_frames: int):
+    """Load frames from corridor_eval_data (manifest.jsonl + rgb/depth/da3_depth)."""
+    with open(manifest_path) as f:
+        entries = [json.loads(line) for line in f]
+    n = min(num_frames, len(entries))
+    stride = max(1, len(entries) // n)
+    selected = [entries[i * stride] for i in range(n) if i * stride < len(entries)]
+
+    base = manifest_path.parent
+    frames = []
+    for idx, e in enumerate(selected):
+        rgb_path = base / e["rgb"]
+        depth_path = base / e["sensor_depth"]
+        frame_id = Path(e["rgb"]).stem
+        if not rgb_path.exists() or not depth_path.exists():
+            print(f"  Frame {idx}: missing {rgb_path.name} or {depth_path.name}, skipping")
+            continue
+        rgb = np.array(Image.open(rgb_path).convert("RGB"))
+        depth = np.load(depth_path).astype(np.float32)
+        frames.append({"frame_id": frame_id, "rgb": rgb, "depth": depth})
+    print(f"Loaded {len(frames)} frames from corridor_eval_data")
+    return frames, base
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate paper-quality depth comparison figures")
-    parser.add_argument("--bag", type=str, required=True,
-                        help="Path to rosbag directory")
+    parser.add_argument("--bag", type=str, default=None,
+                        help="Path to rosbag directory (required unless --corridor-eval/--manifest)")
+    parser.add_argument("--corridor-eval", action="store_true",
+                        help="Use corridor_eval_data instead of rosbag (precomputed DA3)")
+    parser.add_argument("--manifest", type=str, default=None,
+                        help="Path to manifest.jsonl (e.g. from gazebo_frame_capture.py)")
+    parser.add_argument("--gazebo", action="store_true",
+                        help="Gazebo mode: relabel 'Sensor Depth' as 'GT Depth (Gazebo)', "
+                             "skip fusion panels (GT has no dead pixels)")
     parser.add_argument("--output-dir", type=str,
                         default="/home/nishant/maps/paper_figures/model_comparison",
                         help="Output directory for figures")
@@ -329,8 +419,14 @@ def main():
                         help="Max depth for colormap (metres)")
     parser.add_argument("--skip-da3", action="store_true",
                         help="Skip DA3-Small inference (slow on CPU)")
+    parser.add_argument("--skip-seconds", type=float, default=0.0,
+                        help="Skip this many seconds from the start of the bag "
+                             "(useful when robot is static at the beginning)")
     parser.add_argument("--device", type=str, default="cpu")
     args = parser.parse_args()
+
+    if not args.corridor_eval and not args.bag and not args.manifest:
+        parser.error("Either --bag, --corridor-eval, or --manifest is required")
 
     device = torch.device(args.device)
     output_dir = Path(args.output_dir)
@@ -340,9 +436,24 @@ def main():
 
     H, W = 240, 320
     cfg = Config()
+    corridor_base = None
 
     # --- Extract frames ---
-    frames = extract_frames_from_db3(args.bag, args.num_frames)
+    if args.manifest:
+        manifest = Path(args.manifest)
+        if not manifest.exists():
+            raise FileNotFoundError(f"Manifest not found: {manifest}")
+        frames, corridor_base = extract_frames_from_corridor_eval(manifest, args.num_frames)
+    elif args.corridor_eval:
+        manifest = Path(__file__).parent / "corridor_eval_data" / "manifest.jsonl"
+        if not manifest.exists():
+            raise FileNotFoundError(f"Corridor manifest not found: {manifest}")
+        frames, corridor_base = extract_frames_from_corridor_eval(manifest, args.num_frames)
+    else:
+        frames = extract_frames_from_db3(args.bag, args.num_frames,
+                                         skip_seconds=args.skip_seconds)
+        for i, f in enumerate(frames):
+            f["frame_id"] = f"{i:04d}"
 
     # Save extracted frames
     for i, f in enumerate(frames):
@@ -350,10 +461,13 @@ def main():
         rgb_resized = rgb_pil.resize((W, H), Image.BILINEAR)
         rgb_resized.save(output_dir / "frames" / f"frame_{i:04d}_rgb.png")
 
-        if f["depth"] is not None:
-            depth_pil = Image.fromarray(f["depth"])
+        if f.get("depth") is not None:
+            d = f["depth"]
+            if d.dtype == np.uint16:
+                d = d.astype(np.float32) / 1000.0
             depth_resized = np.array(
-                depth_pil.resize((W, H), Image.NEAREST), dtype=np.float32
+                Image.fromarray(d.astype(np.float32)).resize((W, H), Image.NEAREST),
+                dtype=np.float32,
             )
             np.save(output_dir / "frames" / f"frame_{i:04d}_depth.npy", depth_resized)
     print(f"Saved {len(frames)} extracted frames to {output_dir / 'frames'}")
@@ -371,13 +485,19 @@ def main():
         loaded_models[name] = (model, info["imagenet_norm"])
         print(f"  [{name}] Loaded OK")
 
-    # --- Load DA3-Small ---
+    # --- Load DA3-Small (only needed when not using corridor-eval precomputed) ---
     da3_pipe = None
-    if not args.skip_da3:
+    if not args.skip_da3 and not args.corridor_eval and not args.manifest:
         try:
             da3_pipe = load_da3_model(device)
         except Exception as e:
             print(f"  DA3 loading failed: {e}. Skipping DA3.")
+
+    # --- Gazebo mode config ---
+    sensor_label = "GT Depth (Gazebo)" if args.gazebo else "Sensor Depth (Femto Bolt)"
+    title_prefix = ("Gazebo Simulated Corridor — Depth Comparison"
+                    if args.gazebo else "Corridor Depth Comparison")
+    skip_fusion = args.gazebo
 
     # --- Run inference on each frame ---
     print(f"\n=== Running Inference on {len(frames)} Frames ===")
@@ -387,10 +507,13 @@ def main():
 
         # Sensor depth (resized to model resolution)
         sensor_depth = None
-        if f["depth"] is not None:
-            depth_pil = Image.fromarray(f["depth"])
+        if f.get("depth") is not None:
+            d = f["depth"]
+            if d.dtype == np.uint16:
+                d = d.astype(np.float32) / 1000.0
             sensor_depth = np.array(
-                depth_pil.resize((W, H), Image.NEAREST), dtype=np.float32
+                Image.fromarray(d.astype(np.float32)).resize((W, H), Image.NEAREST),
+                dtype=np.float32,
             )
 
         predictions = {}
@@ -404,8 +527,31 @@ def main():
             print(f"  {name}: range [{pred.min():.2f}, {pred.max():.2f}]m, "
                   f"mean {pred.mean():.2f}m")
 
-        # DA3-Small
-        if da3_pipe is not None:
+        # DA3-Small: precomputed (corridor-eval) or live inference
+        if corridor_base is not None:
+            frame_id = f.get("frame_id", f"{i:04d}")
+            da3_path = corridor_base / "da3_depth" / f"{frame_id}.npy"
+            if da3_path.exists():
+                da3_full = np.load(da3_path).astype(np.float32)
+                da3_resized = np.array(
+                    Image.fromarray(da3_full).resize((W, H), Image.BILINEAR),
+                    dtype=np.float32,
+                )
+                if sensor_depth is not None:
+                    valid = (sensor_depth >= 0.1) & (sensor_depth <= 5.0)
+                    if valid.sum() > 100 and np.median(da3_resized[valid]) > 1e-8:
+                        scale = np.median(sensor_depth[valid]) / np.median(da3_resized[valid])
+                        da3_metric = da3_resized * scale
+                    else:
+                        da3_metric = da3_resized
+                else:
+                    da3_metric = da3_resized
+                predictions["DA3-Small"] = da3_metric
+                save_individual_depth(da3_metric, "DA3-Small", i,
+                                     output_dir / "individual", vmax=2.0)
+                print(f"  DA3-Small (precomputed): range [{da3_metric.min():.2f}, "
+                      f"{da3_metric.max():.2f}]m")
+        elif da3_pipe is not None:
             print(f"  Running DA3-Small...")
             da3_relative = run_da3_inference(da3_pipe, rgb_pil)
             da3_resized = np.array(
@@ -425,7 +571,7 @@ def main():
 
             predictions["DA3-Small"] = da3_metric
             save_individual_depth(da3_metric, "DA3-Small", i,
-                                 output_dir / "individual", vmax=args.vmax)
+                                 output_dir / "individual", vmax=2.0)
             print(f"  DA3-Small: range [{da3_metric.min():.2f}, "
                   f"{da3_metric.max():.2f}]m, mean {da3_metric.mean():.2f}m")
 
@@ -434,21 +580,42 @@ def main():
             save_individual_depth(sensor_depth, "Sensor_Depth", i,
                                  output_dir / "individual", vmax=args.vmax)
 
-        # Reorder predictions for the grid: DA3 first, then students
+        # Compute fused depth: sensor where valid, model fills dead pixels
+        # (skipped in Gazebo mode -- GT has no dead pixels)
+        if not skip_fusion:
+            valid_mask = None
+            if sensor_depth is not None:
+                valid_mask = (sensor_depth >= 0.1) & (sensor_depth <= 5.0)
+            if valid_mask is not None and "DA3-Small" in predictions:
+                fused_da3 = np.where(valid_mask, sensor_depth, predictions["DA3-Small"])
+                predictions["Fused(Sensor+DA3)"] = fused_da3
+                save_individual_depth(fused_da3, "Fused_Sensor_DA3", i,
+                                     output_dir / "individual", vmax=args.vmax)
+            if valid_mask is not None and "V9" in predictions:
+                fused_v9 = np.where(valid_mask, sensor_depth, predictions["V9"])
+                predictions["Fused(Sensor+V9)"] = fused_v9
+                save_individual_depth(fused_v9, "Fused_Sensor_V9", i,
+                                     output_dir / "individual", vmax=args.vmax)
+
+        # Reorder predictions for the grid: DA3, students V4..V9, then fused
+        student_order = ["V4", "V5", "V6", "V6.2", "V7", "V8", "V9", "Iter6_B1"]
         ordered = {}
         if "DA3-Small" in predictions:
             ordered["DA3-Small"] = predictions["DA3-Small"]
-        for name in ["V4", "V5", "V7"]:
+        for name in student_order:
             if name in predictions:
                 ordered[name] = predictions[name]
-        if "Iter6_B1" in predictions:
-            ordered["Iter6_B1"] = predictions["Iter6_B1"]
+        if "Fused(Sensor+DA3)" in predictions:
+            ordered["Fused(Sensor+DA3)"] = predictions["Fused(Sensor+DA3)"]
+        if "Fused(Sensor+V9)" in predictions:
+            ordered["Fused(Sensor+V9)"] = predictions["Fused(Sensor+V9)"]
 
         # Comparison grid
         rgb_display = np.array(rgb_pil)
         grid_path = output_dir / "comparisons" / f"frame_{i:04d}_comparison.png"
         create_comparison_grid(
-            rgb_display, sensor_depth, ordered, i, grid_path, vmax=args.vmax
+            rgb_display, sensor_depth, ordered, i, grid_path, vmax=args.vmax,
+            sensor_label=sensor_label, title_prefix=title_prefix,
         )
         print(f"  Saved comparison grid: {grid_path.name}")
 
