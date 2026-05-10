@@ -1,0 +1,104 @@
+# docker-compose.yml — ml_inference reproducibility harness
+#
+# Model weights and evaluation data are volume-mounted, not baked into the image.
+# Download them first:
+#   - hpc_outputs/*.pt  → from HuggingFace (see README)
+#   - corridor_eval_data/ → from HuggingFace (see README)
+#
+# Usage:
+#   docker compose run eval-corridor      # corridor depth evaluation
+#   docker compose run calibration        # calibration sensitivity experiment
+#   docker compose run demo-videos        # generate comparison videos
+#   docker compose run grid-videos        # generate grid comparison videos
+#   docker compose run smoke-test         # verify setup with a dry run
+
+services:
+  base: &base
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./hpc_outputs:/app/hpc_outputs:ro
+      - ./corridor_eval_data:/app/corridor_eval_data:ro
+      - ./output:/app/output
+
+  smoke-test:
+    <<: *base
+    entrypoint: ["python", "-c"]
+    command:
+      - |
+        import torch, cv2, numpy as np
+        from models.student import build_student
+        from config import Config
+        cfg = Config()
+        m = build_student(num_classes=cfg.NUM_CLASSES, pretrained=False, backbone=cfg.BACKBONE)
+        x = torch.randn(1, 3, 240, 320)
+        d, s = m(x)
+        print(f'Model forward pass OK: depth {tuple(d.shape)}, seg {tuple(s.shape)}')
+        print(f'PyTorch {torch.__version__}, OpenCV {cv2.__version__}, NumPy {np.__version__}')
+        print('Smoke test passed.')
+
+  eval-corridor:
+    <<: *base
+    command:
+      - eval_corridor_depth.py
+      - --checkpoint
+      - hpc_outputs/best_depth_v9.pt
+      - --manifest
+      - corridor_eval_data/manifest.jsonl
+      - --imagenet-norm
+
+  calibration:
+    <<: *base
+    command:
+      - calibration_sensitivity.py
+
+  demo-videos:
+    <<: *base
+    volumes:
+      - ./hpc_outputs:/app/hpc_outputs:ro
+      - ./corridor_eval_data:/app/corridor_eval_data:ro
+      - ./output:/app/output
+    command:
+      - generate_demo_videos.py
+      - --dataset
+      - corridor
+      - --models
+      - all
+      - --output-dir
+      - /app/output/demo_videos
+      - --device
+      - cpu
+
+  demo-videos-gpu:
+    <<: *base
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    command:
+      - generate_demo_videos.py
+      - --dataset
+      - corridor
+      - --models
+      - all
+      - --output-dir
+      - /app/output/demo_videos
+      - --device
+      - cuda
+
+  grid-videos:
+    <<: *base
+    command:
+      - generate_grid_video.py
+      - --dataset
+      - corridor
+      - --variant
+      - models
+      - fused
+      - combined
+      - --output-dir
+      - /app/output/demo_videos
+      - --device
+      - cpu

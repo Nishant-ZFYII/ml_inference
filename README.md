@@ -10,6 +10,8 @@
 [![TensorRT](https://img.shields.io/badge/TensorRT-FP16%20%7C%20INT8-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![arXiv preprint](https://img.shields.io/badge/arXiv_preprint-2603.28890-b31b1b.svg)](https://arxiv.org/abs/2603.28890)
+[![Docker](https://img.shields.io/badge/docker-reproducible-2496ED.svg?logo=docker&logoColor=white)](#docker-reproducibility)
+[![Project Blog](https://img.shields.io/badge/blog-Bootstrap%20Perception-1f425f.svg)](https://nishant-zfyii.github.io/ml_inference/)
 
 <img src="assets/hero_fusion.png" alt="Depth fusion on a corridor frame: RGB → ToF (most pixels dead) → DA3-Small → V9 student → fused" width="92%"/>
 
@@ -275,6 +277,9 @@ ml_inference/
 ├── print_model_shapes.py           ← Encoder feature-map verification utility
 │
 ├── generate_paper_figures.py       ← Figures from rosbag + checkpoints
+├── generate_demo_videos.py         ← Individual model comparison videos (1280×720)
+├── generate_grid_video.py          ← Synchronized 2×3 / 2×4 grid comparison videos
+├── generate_corridor_missing.py    ← OOM-safe sequential model inference for corridor
 ├── create_full_comparison.py       ← Side-by-side comparison panels
 ├── create_paper_fig2.py            ← Fig. 2 generator
 ├── extract_bag_frames.py           ← Frame extraction from rosbag2 (.db3)
@@ -318,12 +323,67 @@ ml_inference/
 │   ├── temporal_consistency.json   ← Frame-to-frame stability
 │   └── costmap_ablation/           ← Per-config inflation radii + per-frame metrics
 │
+├── Dockerfile                      ← ML inference / evaluation container
+├── docker-compose.yml              ← Multi-service reproducibility harness
+│
+├── docs/                           ← Jekyll site (nishant-zfyii.github.io/ml_inference)
+│   ├── _config.yml                 ← Jekyll config
+│   ├── index.md                    ← Project overview
+│   ├── training.md                 ← V1 → V9 training lineage
+│   ├── evaluation.md               ← Depth metrics, costmap ablation
+│   ├── calibration.md              ← Reviewer-requested calibration study
+│   ├── deployment.md               ← ONNX / TRT export, Jetson benchmarks
+│   ├── datasets.md                 ← Data inventory and provenance
+│   ├── videos.md                   ← Demo video generation pipeline
+│   └── docker.md                   ← Docker usage guide
+│
 ├── archive/
 │   ├── README.md                   ← Archive index
 │   └── v1-v3-baseline/             ← Frozen V1-V3 codebase (MobileNetV3 + DA2)
 │
 └── assets/                         ← Figures referenced by this README
 ```
+
+---
+
+## Docker reproducibility
+
+The fastest path from clone to results. Model weights and evaluation data are volume-mounted, not baked into the image.
+
+```bash
+# Build
+docker compose build
+
+# Smoke test (no data needed — verifies model forward pass)
+docker compose run smoke-test
+
+# Corridor depth evaluation (needs weights + eval data)
+docker compose run eval-corridor
+
+# Calibration sensitivity experiment (reviewer response)
+docker compose run calibration
+
+# Demo videos and grid comparisons
+docker compose run demo-videos
+docker compose run grid-videos
+```
+
+| Service | What it runs | GPU needed |
+|---|---|---|
+| `smoke-test` | Model architecture + forward pass check | No |
+| `eval-corridor` | V9 depth on 459 corridor frames | No (CPU), faster with GPU |
+| `calibration` | Calibration sensitivity sweep (N = 1–100 frames) | No |
+| `demo-videos` | Individual model comparison videos (1280×720, XVID) | No |
+| `demo-videos-gpu` | Same, GPU-accelerated inference | Yes |
+| `grid-videos` | Synchronized 2×3 / 2×4 grid comparison videos | No |
+
+For GPU passthrough: `docker compose run demo-videos-gpu` (requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)).
+
+---
+
+## Engineering blog
+
+The [project blog](https://nishant-zfyii.github.io/ml_inference/) walks through each component in long-form: the training lineage (why V1 failed at 75 m RMSE and how nine iterations got to 0.382 m), the costmap ablation protocol, the reviewer-requested calibration sensitivity experiment, deployment gotchas on the Jetson, and the demo video generation pipeline. If the README is the reference card, the blog is the design journal.
 
 ---
 
