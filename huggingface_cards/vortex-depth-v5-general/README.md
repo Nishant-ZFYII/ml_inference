@@ -106,17 +106,12 @@ The deployment pipeline applies confidence-gated fusion: where the ToF confidenc
 - **Documentation**: [nishant-zfyii.github.io/ml_inference](https://nishant-zfyii.github.io/ml_inference/)
 - **V5 model page**: [Atlas (V5)](https://nishant-zfyii.github.io/ml_inference/models/v5-deployment-aug)
 
-## Citation
+## Reference
 
-If you use this model, please cite:
+If you use this model in your work, please reference the project repository:
 
-```bibtex
-@misc{vortex-depth-2026,
-  title={Vortex-Depth: Bootstrap Perception Under Hardware Depth Failure for Indoor Robot Navigation},
-  author={Pushparaju, Nishant and Mattam, Vivekananda Swamy and Arab, Aliasghar},
-  year={2026},
-  url={https://github.com/Nishant-ZFYII/ml_inference}
-}
+```
+https://github.com/Nishant-ZFYII/ml_inference
 ```
 
 ## License

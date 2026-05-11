@@ -114,15 +114,12 @@ This checkpoint is one component of a three-checkpoint family released as part o
 - **Documentation**: [nishant-zfyii.github.io/ml_inference](https://nishant-zfyii.github.io/ml_inference/)
 - **V6 model page**: [Cornerstone (V6)](https://nishant-zfyii.github.io/ml_inference/models/v6-sun-diode-pretrain)
 
-## Citation
+## Reference
 
-```bibtex
-@misc{vortex-depth-2026,
-  title={Vortex-Depth: Bootstrap Perception Under Hardware Depth Failure for Indoor Robot Navigation},
-  author={Pushparaju, Nishant and Mattam, Vivekananda Swamy and Arab, Aliasghar},
-  year={2026},
-  url={https://github.com/Nishant-ZFYII/ml_inference}
-}
+If you use this model in your work, please reference the project repository:
+
+```
+https://github.com/Nishant-ZFYII/ml_inference
 ```
 
 ## License

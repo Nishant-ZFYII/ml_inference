@@ -1,6 +1,5 @@
 title: "Bootstrap Perception"
 description: "Monocular depth distillation for indoor robot navigation under hardware depth failure — training pipeline, evaluation, and deployment."
-author: "Nishant Pushparaju, Vivek Mattam"
 baseurl: "/ml_inference"
 url: "https://nishant-zfyii.github.io"
 

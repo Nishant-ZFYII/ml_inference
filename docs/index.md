@@ -98,4 +98,4 @@ PyTorch 2.0+ · timm (EfficientViT-B1) · ONNX · TensorRT FP16 · OpenCV-headle
 
 ---
 
-NYU MS Mechatronics & Robotics — Nishant Pushparaju, Vivek Mattam, Prof. Aliasghar Arab
+*A robotics research project. Author and contributor information is omitted from this site during the active review window and will be added once review completes.*

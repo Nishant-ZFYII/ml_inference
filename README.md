@@ -426,13 +426,12 @@ git checkout v1-v3-baseline
 
 ## Acknowledgements
 
-- **Vivekananda Swamy Mattam** — ROS 2 stack, hardware integration, training pipeline V3 onward, technical writing.
-- **Nishant Pushparaju** — EfficientViT-B1 backbone (V4 turning point), HPC training infrastructure, Gazebo closed-loop validation, Jetson deployment.
-- **Prof. Aliasghar Arab** — faculty advisor, NYU Tandon MAE.
-- **NYU HPC** for compute on the Torch cluster (`torch_pr_742_general`).
+- **Compute**: NYU HPC Torch cluster (`torch_pr_742_general`).
 - **Foundation models** used as teachers and runtime: Depth Anything V3 (DA3-Metric-Large + DA3-Small), SAM2-Large, YOLOv8.
 - **Datasets**: NYU Depth V2 (Silberman et al.), SUN RGB-D, DIODE, LILocBench, TUM RGB-D.
-- **Vortex project vault** (separate repository) — source of the project's design rationale and lessons.
+- **Sibling repository**: ROS 2 runtime nodes, Nav2 configuration, and Gazebo simulation harness live in `NCHSB`.
+
+*Author attribution is omitted from this README during the active review window. Full author and contributor information will be restored after the review process completes.*
 
 ---
 
