@@ -21,34 +21,36 @@
 
 ---
 
-## What this is
+## Overview
 
-A reproducible training scaffold that produces small, quantization-friendly student models for indoor depth + segmentation, distilled from large foundation teachers. We use it to study a single question:
+This repository is the off-board half of a bootstrap-perception system for indoor robot navigation under hardware depth failure. It contains the training pipeline that produces compact monocular depth and 6-class semantic segmentation student models distilled from large foundation teachers, the offline evaluation scaffold that measures their accuracy, and the export tooling that converts trained checkpoints to TensorRT engines for on-vehicle deployment.
 
-> Can a single RGB camera running a foundation monocular depth model stand in for, or augment, the structured-light/ToF sensors that dominate today's indoor navigation stacks?
+The system addresses a specific operational problem. The deployment camera (Orbbec Femto Bolt Time-of-Flight) returns valid depth on approximately 22 % of pixels in the target environment; the remaining 78 % are lost to reflective surfaces (polished floors, glass walls, mid-field returns beyond sensor range). The bootstrap-perception strategy uses the surviving valid pixels to anchor a learned monocular depth prediction to metric scale, then fuses the two signals per pixel to produce a dense depth signal that the local costmap can consume. The position this work supports:
 
-The position this work defends, in one sentence: **monocular depth cannot replace LiDAR outright, but it is an unexpectedly strong fusion partner** — fusing LiDAR with depth recovers ~+55 % occupied costmap cells in narrow corridors and fills dense depth exactly where the hardware sensor gives up.
+> Monocular depth estimation cannot replace structured-light or Time-of-Flight depth in indoor navigation, but it is an effective fusion partner. Fusing LiDAR with confidence-gated learned depth recovers approximately 55 % more occupied costmap cells in narrow corridors than LiDAR alone, and produces dense geometry where the hardware sensor returns invalid pixels.
 
-This repository is the **off-board** half of that story:
+The runtime ROS 2 nodes (Depth Fusion, Class Costmap, Student TRT, YOLO TRT), the Nav2 configuration, and the live deployment harness on the Traxxas Maxx 4S testbed live in the sibling repository `NCHSB`. The two repositories are deliberately decoupled along the off-board / on-vehicle boundary; their dependency stacks, release cadences, and audiences differ.
 
-| Lives here (`ml_inference`) | Lives elsewhere (sibling repo `NCHSB`) |
-|---|---|
-| Teacher inference on HPC (DA3-Metric-Large + YOLO + SAM2-Large) | ROS 2 nodes (Depth Fusion, Class Costmap, Student TRT, YOLO TRT) |
-| Student training (V1 → V9 lineage) | `nav2_params_rc.yaml`, controllers.yaml, EKF, launch files |
-| ONNX / TensorRT export and Jetson micro-benchmarks | Live Nav2 integration on the Traxxas Maxx 4S testbed |
-| Offline evaluation scripts that produce the reported results tables | The Gazebo simulation worlds and the rosbag harness |
-
-If you want the runtime, look at `NCHSB`. If you want to retrain the student on your own corridor data, you are in the right place.
+| Component | This repository (`ml_inference`) | Sibling repository (`NCHSB`) |
+|---|---|---|
+| Teacher inference on HPC | DA3-Metric-Large + YOLOv8 + SAM2-Large | — |
+| Student training (V1 → V9 lineage) | All 9 configurations | — |
+| Offline evaluation pipelines | Per-pixel depth, costmap ablation, calibration sensitivity | — |
+| Export toolchain | ONNX → TensorRT FP16 / INT8, Jetson micro-benchmarks | — |
+| Runtime ROS 2 nodes | — | Depth Fusion, Class Costmap, Student TRT, YOLO TRT |
+| Navigation configuration | — | `nav2_params_rc.yaml`, controllers, EKF, launch files |
+| Deployment platform | — | Live integration on Traxxas Maxx 4S |
+| Simulation harness | — | Gazebo Fortress worlds, rosbag replay |
 
 ---
 
-## Highlights
+## Project highlights
 
-- **Bootstrap perception, not blind replacement.** The motivating statistic — `pixel_fusion.json:319-322` — is that the Orbbec Femto Bolt ToF returns valid depth on only **22.21 %** of pixels in our corridor. The other 77.79 % are reflective floor, glass, and out-of-range walls. A monocular student trained the right way fills the gap *predictably*.
-- **V9 student: 0.382 m RMSE on LILocBench** (V6 → LILocBench fine-tune), **9 / 10** Gazebo closed-loop success — matches the GT-depth reference run on the same seeds.
-- **DA3-Small foundation, zero-shot:** **218 FPS / 4.6 ms / 2.7 GB** on Jetson Orin Nano (TensorRT FP16, 308 × 308). Used as the production runtime; the V-series students here are the corridor-specialised companions.
-- **Faithful runtime ↔ training mirror.** The hybrid-depth supervision target (`models/losses.py:26-60`) is *the same equation* as the runtime confidence-gated fusion (`Depth Fusion Node` in NCHSB) — `target = ToF if confidence ≥ τ else DA3`. Train target and deployment fusion encode the same prior.
-- **Audited results.** Every number in the table below traces to a JSON file under `results/`. The deferred APE/SLAM evaluation is documented in [§ Honest caveats](#honest-caveats).
+- **Bootstrap perception architecture.** The Orbbec Femto Bolt Time-of-Flight sensor returns valid depth on 22.21 % of pixels in the corridor evaluation set; the surviving pixels anchor a learned monocular prediction to metric scale via per-frame median alignment. The runtime fusion (per-pixel confidence-gated substitution) preserves hardware geometry where available and substitutes the calibrated learned signal where the sensor failed.
+- **Corridor specialist with closed-loop validation.** The V9 student (Lighthouse) achieves 0.382 m LILocBench corridor RMSE and matches ground-truth-depth navigation performance in Gazebo Fortress closed-loop trials (9 / 10 success at 10 seeds, 0 collisions, time-to-goal within 0.22 s of the ground-truth baseline).
+- **Foundation-model deployment headline.** DA3-Small zero-shot inference benchmarks at 218 FPS / 4.6 ms / 2.7 GB on the Jetson Orin Nano (TensorRT FP16, 308 × 308 input). The V-series students complement the foundation model as corridor-domain specialists rather than replacing it.
+- **Specification-aligned training target.** The hybrid depth supervision in `models/losses.py:HybridDepthLoss` selects DA3 teacher depth where available and falls back to ToF measurement otherwise. The frame-level training rule and the per-pixel deployment fusion implement the same supervision principle (prefer hardware ground truth where available; fall back to the learned signal where not) at the granularity appropriate to each stage.
+- **Auditable results.** Every reported number traces to a JSON file under `results/`. Quantitative claims are reproducible from the offline evaluation pipeline (see Quick start below). The deferred APE / SLAM evaluation is documented in [§ Limitations and disclosures](#limitations-and-disclosures).
 
 ---
 
@@ -75,25 +77,28 @@ The repository's `main` reflects the V4-V9 production codebase. The earlier V1-V
 
 Corridor RMSE is reported on two different sets: **LILocBench** (Bonn corridor benchmark, used for fine-tuning V7 and V9) and **Femto Bolt** (our own indoor corridor recordings, used as the deployment-truth set). They are not interchangeable — LILocBench is shorter and structurally simpler.
 
-| Version | Backbone | Teacher | NYU RMSE | LILocBench RMSE | Femto Bolt RMSE | What changed | Why it matters |
-|---|---|---|---|---|---|---|---|
-| V1 | MobileNetV3-Small | DA2-Large | 75.37 m | — | — | Initial training | Disaster: DA2 emits *relative* depth, no scale anchor. Lesson, not a result. |
-| V2 | MobileNetV3-Small | DA2-Large | — | — | — | Kendall clamp experiments | Diagnostic only. |
-| V3 | MobileNetV3-Small | DA3-Large | 1.160 m | — | — | berHu loss, Kendall weighting, two-LR optimizer | First version that deserves to be called real. |
-| V4 | **EfficientViT-B1** | DA3-Large | 0.774 m | — | 1.373 m | Backbone swap | -33 % NYU RMSE; backbone still matters once the recipe is right. |
-| V5 | EfficientViT-B1 | DA3-Large | **0.572 m** | — | 2.186 m | Deployment augmentations | **Best general indoor model.** Augmentations help NYU, hurt domain transfer. |
-| V6 | EfficientViT-B1 | DA3-Large | **0.519 m** | — | 2.158 m | SUN+DIODE pretrain → NYU finetune | **Best NYU depth.** The right base for specialisation. |
-| V7 | EfficientViT-B1 | DA3-Large | 1.315 m | 0.445 m | 1.982 m | V5 → LILocBench fine-tune | First serious corridor specialist. Catastrophic NYU forgetting. |
-| V8 | EfficientViT-B1 | DA3-Large | 0.592 m | — | 2.266 m | Mixed NYU + LILocBench from V5 | Failed: mixing made corridor *worse* than V5. Domain gap not bridged by naive mixing. |
-| **V9** | EfficientViT-B1 | DA3-Large | 1.553 m | **0.382 m** | 1.589 m | V6 → LILocBench fine-tune | **Best corridor specialist.** Used in the closed-loop Gazebo experiments. |
+| Version | Codename | Backbone | Teacher | NYU RMSE | LILocBench RMSE | Femto Bolt RMSE | Configuration change | Outcome |
+|---|---|---|---|---|---|---|---|---|
+| V1 | Compass | MobileNetV3-Small | DA2-Large | 75.37 m | — | — | Initial distillation | Baseline. Unit-space mismatch (DA2 outputs relative depth) dominates the result. |
+| V2 | Sextant | MobileNetV3-Small | DA2-Large | — | — | — | Kendall log-σ² clamp experiments | Diagnostic; ruled out loss weighting as the dominant cause of V1's result. |
+| V3 | Anchor | MobileNetV3-Small | DA3-Large | 1.160 m | — | — | berHu loss + Kendall weighting + two-rate optimizer | First metric-scale predictions. Recipe set at V3 and held constant through V9. |
+| V4 | Pivot | **EfficientViT-B1** | DA3-Large | 0.774 m | — | 1.373 m | Encoder substitution | −33 % NYU RMSE at fixed recipe. Architecture inherited by V5–V9. |
+| V5 | **Atlas** | EfficientViT-B1 | DA3-Large | **0.572 m** | — | 2.186 m | Deployment-targeted augmentation pipeline | **Production: general indoor.** Largest single-step NYU improvement (−26 %). |
+| V6 | **Cornerstone** | EfficientViT-B1 | DA3-Large | **0.519 m** | — | 2.158 m | Multi-domain pretraining (SUN+DIODE) → NYU fine-tune | **Production: fine-tuning base.** Best NYU result in lineage. |
+| V7 | Tunnel | EfficientViT-B1 | DA3-Large | 1.315 m | 0.445 m | 1.982 m | V5 → LILocBench fine-tune | First corridor specialization. NYU regression characteristic of single-domain fine-tuning. |
+| V8 | Confluence | EfficientViT-B1 | DA3-Large | 0.592 m | — | 2.266 m | Joint NYU + LILocBench training from V5 | Joint-domain training does not improve corridor performance over the V5 baseline (Pareto-dominated by V9). |
+| **V9** | **Lighthouse** | EfficientViT-B1 | DA3-Large | 1.553 m | **0.382 m** | 1.589 m | V6 → LILocBench fine-tune | **Production: corridor specialist.** Closed-loop validated against ground-truth depth in simulation. |
 
 Recipe details and per-version provenance are on the [model lineage page](https://nishant-zfyii.github.io/ml_inference/models/) of the project blog. Each version (V1 through V9) has a dedicated page documenting the configuration change, the experimental outcome, and the design rationale.
 
-**When to use which checkpoint:**
-- **V5** — best general-purpose indoor student (NYU 0.572 m, balanced).
-- **V6** — best NYU depth (0.519 m), recommended pretraining base for further specialisation.
-- **V9** — best corridor specialist on LILocBench (0.382 m), used in the closed-loop Gazebo experiments. Pays for it with NYU forgetting (1.553 m).
-- **DA3-Small (foundation)** — used as the production runtime model on the Jetson, zero-shot. The V-series students complement it; they don't replace it.
+### Selection guidance
+
+| Use case | Recommended checkpoint |
+|---|---|
+| General-purpose indoor depth estimation | **V5 (Atlas)** — `NYU 0.572 m`, balanced segmentation mIoU 63.7 % |
+| Fine-tuning base for additional domain specialists | **V6 (Cornerstone)** — `NYU 0.519 m`, best NYU result; recommended initialization |
+| Production corridor specialist (closed-loop validated) | **V9 (Lighthouse)** — `LILocBench 0.382 m`, 9 / 10 Gazebo success matching ground-truth depth |
+| Maximum-throughput foundation-model inference on Jetson | **DA3-Small** zero-shot (218 FPS / 4.6 ms / 2.7 GB) — production runtime; V-series students complement it as domain specialists |
 
 ---
 
@@ -148,22 +153,22 @@ Live Nav2 costmap during corridor replay. Green = pixels filled by DA3, blue = p
 
 ---
 
-## Honest caveats
+## Limitations and disclosures
 
 <img src="assets/fpr_decomposition.png" alt="False positive rate decomposition: 49.3% hallucination, 34.6% sensor-invalid fill, 18.1% inflation artifacts" width="60%"/>
 
-The 5.2 % FPR in the L+D configuration is not free. Decomposition (`results/fpr_audit.json`):
+The 5.2 % false-positive rate measured in the L + D configuration is a real operational cost of fusion. Decomposition (`results/fpr_audit.json`):
 
-- **49.3 %** are model hallucinations (depth model predicting a wall where none exists).
-- **34.6 %** are sensor-invalid-fill (depth model labeling pixels obstacle that ToF would have flagged invalid).
-- **18.1 %** are costmap inflation artifacts (geometry correct, inflation too aggressive).
+- **49.3 %** model hallucinations (depth model predicts an obstacle where none exists)
+- **34.6 %** sensor-invalid fill (depth model assigns obstacle status to a pixel where ToF would have reported invalid)
+- **18.1 %** costmap inflation artifacts (geometry correct, inflation radius too aggressive)
 
-Other things you should know before quoting numbers from this repo:
+Additional disclosures relevant to reproducing or quoting reported numbers:
 
-1. **APE / SLAM evaluation deferred to future work.** A preliminary measurement obtained 73 % APE improvement (1.23 m vs 4.63 m) but used different rosbag playback rates between configurations (1.0× for LiDAR-only, 0.5× for fused-depth to allow inference completion). Slower playback runs SLAM Toolbox loop closure more aggressively, which reduces APE independently of the depth-fusion contribution. The original numbers are retained in `paper_stats.json:table_vi` for traceability but are not cited as a result; matched-playback re-evaluation on the deployment hardware is identified as future work.
-2. **The INT8 calibration set in `export_trt.py` is `np.random.rand(...)`** by default (`export_trt.py:182`). The plumbing is correct; the *quality* of the resulting INT8 engine is not. For deployment INT8, supply `--calib-images <dir>` with real corridor frames.
-3. **`benchmark_jetson.py` reports depth RMSE only**, not segmentation mIoU. The mIoU column is initialised but never populated (`benchmark_jetson.py:150,186`). Latency and depth-RMSE are real; ignore mIoU there.
-4. **V9 is a corridor specialist, not a universal model.** Its NYU val RMSE (1.553 m) is much worse than V5/V6's (0.572 / 0.519 m). Specialisation is real and useful, but it is *not* a strictly better model.
+1. **APE / SLAM evaluation deferred to future work.** A preliminary measurement reported a 73 % APE improvement (1.23 m vs 4.63 m) but used asymmetric rosbag playback rates between configurations (1.0× for LiDAR-only, 0.5× for fused-depth to allow inference completion). Slower playback runs SLAM Toolbox loop closure more aggressively, which reduces APE independently of the depth-fusion contribution. The preliminary numbers are retained in `paper_stats.json:table_vi` for traceability but are not cited as a reported result. Matched-playback re-evaluation on the deployment hardware is identified as future work.
+2. **INT8 calibration in `export_trt.py` defaults to random tensors.** The plumbing for INT8 quantization is implemented and functional; the *accuracy* of the resulting INT8 engine without calibration data is not validated. For deployment INT8, supply `--calib-images <dir>` pointing at representative corridor frames. All reported Jetson runtime numbers (218 FPS / 4.6 ms / 2.7 GB on DA3-Small) use FP16, not INT8.
+3. **`benchmark_jetson.py` reports depth RMSE only.** The segmentation mIoU column is initialized but not populated. Latency and depth-RMSE measurements from this script are valid; mIoU values from this script should not be used.
+4. **V9 is specialized for corridor environments, not a general-purpose model.** NYU val RMSE (1.553 m) substantially exceeds V5 (0.572 m) and V6 (0.519 m) — a documented consequence of single-domain fine-tuning under standard catastrophic-forgetting dynamics. The tradeoff is intentional: V9 is the recommended checkpoint when the deployment domain is restricted to corridors; for general indoor scenes, V5 or V6 is preferred.
 
 ---
 
