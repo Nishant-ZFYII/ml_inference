@@ -5,7 +5,7 @@ title: Architecture
 
 # System architecture
 
-Four diagrams. Each captures one slice of the system: the two-repository split, the student model, the runtime fusion pipeline, and the training loss. The full picture is all four composed.
+Four diagrams. Each captures one slice of the system: the two-repository split, the student model, the runtime fusion pipeline, and the training loss. All four use a left-to-right reading direction; the page CSS allows horizontal scroll for wide diagrams when the viewport is narrow.
 
 ---
 
@@ -14,147 +14,116 @@ Four diagrams. Each captures one slice of the system: the two-repository split, 
 The off-board training pipeline (this repository) produces a TensorRT engine that the on-vehicle runtime (sibling repository `NCHSB`) consumes. The `.engine` artifact is the only file that crosses the boundary.
 
 <div class="mermaid">
-flowchart TB
-    subgraph HPC["Off-board pipeline (ml_inference, NYU HPC)"]
-        direction LR
-        T["Teacher inference<br/>DA3-Metric-Large<br/>+ YOLOv8 + SAM2-Large"]
-        M["manifest.jsonl<br/>per-frame join"]
-        TR["train.py<br/>EfficientViT-B1 student"]
-        EX["export_trt.py<br/>ONNX → TensorRT FP16"]
-        T --> M --> TR --> EX
-    end
+flowchart LR
+    T["Teacher inference<br/>DA3 + YOLO + SAM2"]:::hpc
+    M["manifest.jsonl"]:::hpc
+    TR["train.py<br/>EfficientViT-B1<br/>student"]:::hpc
+    EX["export_trt.py<br/>ONNX → TensorRT"]:::hpc
+    AR[".engine<br/>(boundary)"]:::pivot
+    STN["Student TRT<br/>Node"]:::jet
+    DFN["Depth Fusion<br/>Node"]:::jet
+    PCN["PointCloud<br/>XYZ Node"]:::jet
+    N2["Nav2 local<br/>costmap"]:::jet
 
-    ARTIFACT[".engine file<br/>(TensorRT FP16)"]
-    EX --> ARTIFACT
+    T --> M --> TR --> EX --> AR --> STN --> DFN --> PCN --> N2
 
-    subgraph JETSON["On-vehicle runtime (NCHSB, Jetson Orin Nano)"]
-        direction LR
-        STN["Student TRT Node<br/>RGB → depth + seg"]
-        DFN["Depth Fusion Node<br/>ToF + student → fused"]
-        PCN["PointCloud XYZ Node<br/>fused → 3D points"]
-        N2["Nav2 local costmap"]
-        STN --> DFN --> PCN --> N2
-    end
-
-    ARTIFACT --> STN
-
-    style HPC fill:#e8f0ff
-    style JETSON fill:#d4e7c5
-    style ARTIFACT fill:#fff3cd
+    classDef hpc fill:#e8f0ff,stroke:#999
+    classDef jet fill:#d4e7c5,stroke:#999
+    classDef pivot fill:#fff3cd,stroke:#666,stroke-width:2px
 </div>
 
-The HPC pipeline runs offline on NYU Greene (L40S 48 GB partitions). The Jetson runtime runs on a Traxxas Maxx 4S testbed at ~30 Hz perception. The `.engine` artifact is the only build product that needs to be transferred between the two systems.
+Blue nodes run on NYU Greene HPC (L40S 48 GB partitions). Green nodes run on the Jetson Orin Nano at ~30 Hz perception. The yellow `.engine` artifact is the only build product that needs to be transferred between the two systems.
 
 ---
 
 ## 2. Student model architecture
 
-EfficientViT-B1 encoder (5.31 × 10⁶ parameters) feeds a 128-channel neck and two parallel transposed-convolution decoders that share skip connections from the encoder. ImageNet normalization is applied within the forward pass to ensure inference-time preprocessing parity with training.
+EfficientViT-B1 encoder (5.31 × 10⁶ parameters), 128-channel neck, two parallel transposed-convolution decoders. ImageNet normalization is applied within the forward pass for inference-time preprocessing parity.
 
 <div class="mermaid">
-flowchart TB
-    IN["RGB input<br/>[B, 3, 240, 320]<br/>(ImageNet normalization in forward)"]
+flowchart LR
+    IN["RGB input<br/>[B, 3, 240, 320]"]:::input
+    ENC["EfficientViT-B1<br/>encoder<br/>(5.31 × 10⁶ params)"]:::block
+    NECK["Neck<br/>Conv2d(256→128, 1×1)"]:::neck
+    DEC_D["Depth decoder<br/>3 × DecoderBlock<br/>+ Conv2d(16,1) + ReLU"]:::block
+    DEC_S["Seg decoder<br/>3 × DecoderBlock<br/>+ Conv2d(16,6)"]:::block
+    OUT_D["Depth output<br/>[B, 1, 240, 320]<br/>metric (m)"]:::output
+    OUT_S["Seg logits<br/>[B, 6, 240, 320]"]:::output
 
-    ENC["EfficientViT-B1 encoder<br/>4 stages: 40 → 80 → 160 → 256 ch<br/>5.31 × 10⁶ parameters"]
+    IN --> ENC --> NECK
+    NECK --> DEC_D --> OUT_D
+    NECK --> DEC_S --> OUT_S
+    ENC -.skip features.-> DEC_D
+    ENC -.skip features.-> DEC_S
 
-    NECK["Neck: Conv2d(256 → 128, 1×1)"]
-
-    DEC_D["Depth decoder<br/>3 × DecoderBlock<br/>+ Conv2d(16, 1) + ReLU"]
-    DEC_S["Segmentation decoder<br/>3 × DecoderBlock<br/>+ Conv2d(16, 6)"]
-
-    OUT_D["Depth output<br/>[B, 1, 240, 320] in meters"]
-    OUT_S["Segmentation logits<br/>[B, 6, 240, 320]"]
-
-    IN --> ENC
-    ENC --> NECK
-    NECK --> DEC_D
-    NECK --> DEC_S
-    ENC -.skip features<br/>(stages 1, 2, 3).-> DEC_D
-    ENC -.skip features<br/>(stages 1, 2, 3).-> DEC_S
-    DEC_D --> OUT_D
-    DEC_S --> OUT_S
-
-    style ENC fill:#e8f0ff
-    style NECK fill:#fff3cd
-    style DEC_D fill:#e8f0ff
-    style DEC_S fill:#e8f0ff
-    style OUT_D fill:#d4e7c5
-    style OUT_S fill:#d4e7c5
+    classDef input fill:#f5f5f5,stroke:#999
+    classDef block fill:#e8f0ff,stroke:#999
+    classDef neck fill:#fff3cd,stroke:#999
+    classDef output fill:#d4e7c5,stroke:#999
 </div>
 
-The encoder's four stages produce feature maps at H/2, H/4, H/8, and H/16 spatial resolutions with 40, 80, 160, and 256 channels respectively. Each `DecoderBlock(in, out)` implements `Upsample(2×) → Conv2d(in + skip, out, 3×3) → BatchNorm → ReLU`. The skip connection on each block draws from the encoder stage with matching spatial resolution: decoder block 1 receives the stage-3 features, block 2 receives stage-2 features, and block 3 receives stage-1 features. The dashed arrows in the diagram represent this aggregate skip topology; the per-block wiring is uniform.
+The encoder's four stages produce feature maps at H/2, H/4, H/8, and H/16 resolutions with 40, 80, 160, and 256 channels. Each `DecoderBlock(in, out)` implements `Upsample(2×) → Conv2d(in + skip, out, 3×3) → BatchNorm → ReLU`. Skip connections route per-block: decoder block 1 receives stage-3 features, block 2 stage-2, block 3 stage-1. The dashed arrows represent this aggregate skip topology; per-block wiring is uniform across the two decoder paths.
 
 ---
 
 ## 3. Runtime depth fusion
 
-Per frame on the Jetson: the student model produces a depth prediction at 240 × 320, the prediction is upsampled and scale-aligned to the surviving ToF pixels, and a per-pixel decision rule combines the two signals into a fused depth image.
+Per frame on the Jetson: student inference, per-frame median-scale calibration against surviving ToF pixels, per-pixel confidence-gated substitution.
 
 <div class="mermaid">
-flowchart TB
-    RGB["RGB frame<br/>1280 × 720"]
-    TOF["ToF depth + confidence map<br/>1280 × 720 (~22 % valid pixels)"]
+flowchart LR
+    RGB["RGB frame<br/>1280 × 720"]:::input
+    TOF["ToF depth<br/>+ confidence<br/>(~22 % valid)"]:::input
+    STUDENT["V9 student<br/>TensorRT FP16<br/>~5 ms"]:::block
+    SCALE["Median-scale<br/>s = median(d_ToF / d_V9)<br/>over conf ≥ 0.5 pixels"]:::calib
+    GATE{"Per-pixel:<br/>conf ≥ 0.5 AND<br/>0.05 ≤ d_ToF ≤ 10.0 m?"}:::calib
+    FUSED["Fused depth<br/>1280 × 720"]:::output
+    NAV["Nav2 local<br/>costmap"]:::output
 
-    STUDENT["V9 student inference<br/>TensorRT FP16, ~5 ms<br/>240 × 320 → upsampled to 1280 × 720"]
-
-    SCALE["Median-scale calibration<br/>s = median(d_ToF / d_student)<br/>over pixels with conf ≥ 0.5"]
-
-    GATE{"Per-pixel decision<br/>conf ≥ 0.5 AND<br/>0.05 ≤ d_ToF ≤ 10.0 m?"}
-
-    FUSED["Fused depth output<br/>1280 × 720"]
-    NAV["Nav2 local costmap<br/>(via 3D point cloud reprojection)"]
-
-    RGB --> STUDENT
-    STUDENT --> SCALE
+    RGB --> STUDENT --> SCALE --> GATE
     TOF --> SCALE
-    SCALE --> GATE
     TOF --> GATE
-    GATE -->|"yes: substitute d_ToF"| FUSED
-    GATE -->|"no: substitute s · d_student"| FUSED
+    GATE -->|yes: d_ToF| FUSED
+    GATE -->|no: s · d_V9| FUSED
     FUSED --> NAV
 
-    style STUDENT fill:#e8f0ff
-    style SCALE fill:#fff3cd
-    style GATE fill:#fff3cd
-    style FUSED fill:#d4e7c5
-    style NAV fill:#d4e7c5
+    classDef input fill:#f5f5f5,stroke:#999
+    classDef block fill:#e8f0ff,stroke:#999
+    classDef calib fill:#fff3cd,stroke:#999
+    classDef output fill:#d4e7c5,stroke:#999
 </div>
 
 Two operations per frame:
 
-1. **Median-scale calibration** — `s = median(d_ToF / d_student)` over the surviving ToF pixels (those with confidence above 0.5). One scalar per frame. See [Scale Calibration](concepts/scale-calibration).
-2. **Confidence-gated substitution** — per pixel, use the raw ToF reading if its confidence exceeds 0.5 and its depth lies in the trusted range; otherwise use `s · d_student`. See [Confidence-Gated Fusion](concepts/confidence-gated-fusion).
+1. **Median-scale calibration** — `s = median(d_ToF / d_student)` over pixels with confidence ≥ 0.5. One scalar per frame. See [Scale Calibration](concepts/scale-calibration).
+2. **Confidence-gated substitution** — per pixel, use the raw ToF reading where confident and in range; otherwise use `s · d_student`. See [Confidence-Gated Fusion](concepts/confidence-gated-fusion).
 
-The student segmentation output (not shown in this diagram) is consumed separately by the Class Costmap Node to apply per-class inflation radii (glass = 0.20 m, person = 0.30 m, wall = 0.12 m). This layer is implemented and available; activation in the default Nav2 observation source list is opt-in via configuration. See [Specification and Deployment Realization](concepts/specification-and-deployment).
+The student segmentation output (not shown here) is consumed separately by the Class Costmap Node to apply per-class inflation radii (glass = 0.20 m, person = 0.30 m, wall = 0.12 m). Activation in the default Nav2 observation source list is opt-in via configuration. See [Specification and Deployment Realization](concepts/specification-and-deployment).
 
 ---
 
 ## 4. Training loss composition
 
-The multi-task loss combines a depth term (berHu), a segmentation term (cross-entropy), and an edge-aware smoothness regularizer. The three terms are combined via Kendall multi-task weighting with `log σ²` clamped to `[-2, 2]`.
+The multi-task loss combines a depth term (berHu), a segmentation term (cross-entropy), and an edge-aware smoothness regularizer, combined via Kendall multi-task weighting.
 
 <div class="mermaid">
-flowchart TB
-    INPUTS["Forward-pass outputs and per-frame targets<br/>(RGB · predicted depth · predicted seg logits<br/>hybrid depth target (DA3 or ToF) · 6-class seg GT)"]
+flowchart LR
+    INPUTS["Forward outputs<br/>+ per-frame targets"]:::input
+    BERHU["berHu loss<br/>(depth)"]:::loss
+    CE["Cross-entropy<br/>(segmentation)"]:::loss
+    EDGE["Edge-aware<br/>smoothness"]:::loss
+    KENDALL["Kendall weighting<br/>+ edge regularizer<br/>(log σ² ∈ [-2, 2])"]:::weight
+    TOTAL["Total scalar loss<br/>(AdamW backprop)"]:::output
 
-    INPUTS --> BERHU["berHu loss<br/>(depth supervision)"]
-    INPUTS --> CE["Cross-entropy loss<br/>(segmentation supervision)"]
-    INPUTS --> EDGE["Edge-aware smoothness<br/>(depth regularizer)"]
+    INPUTS --> BERHU --> KENDALL
+    INPUTS --> CE --> KENDALL
+    INPUTS --> EDGE --> KENDALL
+    KENDALL --> TOTAL
 
-    BERHU --> KENDALL
-    CE --> KENDALL
-    EDGE --> KENDALL
-
-    KENDALL["Kendall multi-task weighting + edge regularizer<br/>0.5 · exp(-log σ_d) · L_depth + 0.5 · log σ_d<br/>+ exp(-log σ_s) · L_seg + 0.5 · log σ_s<br/>+ λ_edge · L_edge<br/>(log σ clamped to [-2, 2], λ_edge = 0.1)"]
-
-    KENDALL --> TOTAL["Total scalar loss<br/>(backpropagated via AdamW)"]
-
-    style INPUTS fill:#f5f5f5
-    style BERHU fill:#e8f0ff
-    style CE fill:#e8f0ff
-    style EDGE fill:#e8f0ff
-    style KENDALL fill:#fff3cd
-    style TOTAL fill:#d4e7c5
+    classDef input fill:#f5f5f5,stroke:#999
+    classDef loss fill:#e8f0ff,stroke:#999
+    classDef weight fill:#fff3cd,stroke:#999
+    classDef output fill:#d4e7c5,stroke:#999
 </div>
 
-The hybrid depth target lives in `models/losses.py:HybridDepthLoss`. Important nuance: the training target chooses between DA3 and ToF at the *frame* level (does this frame have a DA3 label?), while the deployment fusion chooses between ToF and student at the *pixel* level (does this pixel have valid ToF?). Both implement the same supervision principle — prefer hardware ground truth where available, fall back to the learned signal where not — at the granularity appropriate to each stage. See [decisions](decisions#1-specification-and-deployment-realization) for the full mapping.
+The hybrid depth target lives in `models/losses.py:HybridDepthLoss`. Important nuance: the training target chooses between DA3 and ToF at the **frame** level (does this frame have a DA3 label?), while the deployment fusion chooses between ToF and student at the **pixel** level (does this pixel have valid ToF?). Both implement the same supervision principle — prefer hardware ground truth where available, fall back to the learned signal where not — at the granularity appropriate to each stage. See [decisions](decisions#1-specification-and-deployment-realization) for the full mapping.
