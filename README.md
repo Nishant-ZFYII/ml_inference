@@ -9,13 +9,13 @@
 [![ONNX](https://img.shields.io/badge/ONNX-17-005CED.svg?logo=onnx&logoColor=white)](https://onnx.ai/)
 [![TensorRT](https://img.shields.io/badge/TensorRT-FP16%20%7C%20INT8-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![arXiv preprint](https://img.shields.io/badge/arXiv_preprint-2603.28890-b31b1b.svg)](https://arxiv.org/abs/2603.28890)
 [![Docker](https://img.shields.io/badge/docker-reproducible-2496ED.svg?logo=docker&logoColor=white)](#docker-reproducibility)
 [![Project Blog](https://img.shields.io/badge/blog-Bootstrap%20Perception-1f425f.svg)](https://nishant-zfyii.github.io/ml_inference/)
+[![arXiv](https://img.shields.io/badge/arXiv-2603.28890-555555.svg)](https://arxiv.org/abs/2603.28890)
 
-<img src="assets/hero_fusion.png" alt="Depth fusion on a corridor frame: RGB → ToF (most pixels dead) → DA3-Small → V9 student → fused" width="92%"/>
+<img src="docs/assets/gifs/v9_6panel.gif" alt="Six-panel video showing V9 deployment on the corridor evaluation set: RGB, raw ToF, DA3 reference, V9 inference, ToF+DA3 fusion, ToF+V9 fusion" width="92%"/>
 
-*A typical corridor frame. The Femto Bolt ToF sensor (top-right) loses **77.8 %** of its pixels on the polished floor and glass surfaces. DA3-Small (zero-shot foundation model) and the V9 student (this repo) fill the dead pixels with consistent geometry; the runtime then prefers ToF where it survives and falls back to learned depth elsewhere.*
+*V9 (Lighthouse) production deployment on the 459-frame corridor evaluation set. **Top row:** RGB input · raw Femto Bolt ToF depth (showing the **79.7 % dead pixel rate** that motivates the fusion) · zero-shot DA3-Small reference depth. **Bottom row:** V9 raw inference · ToF + DA3 fusion (foundation-model baseline) · ToF + V9 fusion (production deployment realization, consumed by the local costmap). Verified end-to-end inside the Docker container — see [Docker Reproducibility](#docker-reproducibility).*
 
 </div>
 
@@ -27,7 +27,7 @@ A reproducible training scaffold that produces small, quantization-friendly stud
 
 > Can a single RGB camera running a foundation monocular depth model stand in for, or augment, the structured-light/ToF sensors that dominate today's indoor navigation stacks?
 
-The answer the paper defends, in one sentence: **monocular depth cannot replace LiDAR outright, but it is an unexpectedly strong fusion partner** — fusing LiDAR with depth recovers ~+55 % occupied costmap cells in narrow corridors and fills dense depth exactly where the hardware sensor gives up.
+The position this work defends, in one sentence: **monocular depth cannot replace LiDAR outright, but it is an unexpectedly strong fusion partner** — fusing LiDAR with depth recovers ~+55 % occupied costmap cells in narrow corridors and fills dense depth exactly where the hardware sensor gives up.
 
 This repository is the **off-board** half of that story:
 
@@ -36,7 +36,7 @@ This repository is the **off-board** half of that story:
 | Teacher inference on HPC (DA3-Metric-Large + YOLO + SAM2-Large) | ROS 2 nodes (Depth Fusion, Class Costmap, Student TRT, YOLO TRT) |
 | Student training (V1 → V9 lineage) | `nav2_params_rc.yaml`, controllers.yaml, EKF, launch files |
 | ONNX / TensorRT export and Jetson micro-benchmarks | Live Nav2 integration on the Traxxas Maxx 4S testbed |
-| Offline evaluation scripts that produce the paper's tables | The Gazebo simulation worlds and the rosbag harness |
+| Offline evaluation scripts that produce the reported results tables | The Gazebo simulation worlds and the rosbag harness |
 
 If you want the runtime, look at `NCHSB`. If you want to retrain the student on your own corridor data, you are in the right place.
 
@@ -48,7 +48,7 @@ If you want the runtime, look at `NCHSB`. If you want to retrain the student on 
 - **V9 student: 0.382 m RMSE on LILocBench** (V6 → LILocBench fine-tune), **9 / 10** Gazebo closed-loop success — matches the GT-depth reference run on the same seeds.
 - **DA3-Small foundation, zero-shot:** **218 FPS / 4.6 ms / 2.7 GB** on Jetson Orin Nano (TensorRT FP16, 308 × 308). Used as the production runtime; the V-series students here are the corridor-specialised companions.
 - **Faithful runtime ↔ training mirror.** The hybrid-depth supervision target (`models/losses.py:26-60`) is *the same equation* as the runtime confidence-gated fusion (`Depth Fusion Node` in NCHSB) — `target = ToF if confidence ≥ τ else DA3`. Train target and deployment fusion encode the same prior.
-- **Honest, audited results.** Every number in the table below traces to a JSON file under `results/`. The dropped APE/SLAM claim is documented in [§ Honest caveats](#honest-caveats).
+- **Audited results.** Every number in the table below traces to a JSON file under `results/`. The deferred APE/SLAM evaluation is documented in [§ Honest caveats](#honest-caveats).
 
 ---
 
@@ -85,23 +85,23 @@ Corridor RMSE is reported on two different sets: **LILocBench** (Bonn corridor b
 | V6 | EfficientViT-B1 | DA3-Large | **0.519 m** | — | 2.158 m | SUN+DIODE pretrain → NYU finetune | **Best NYU depth.** The right base for specialisation. |
 | V7 | EfficientViT-B1 | DA3-Large | 1.315 m | 0.445 m | 1.982 m | V5 → LILocBench fine-tune | First serious corridor specialist. Catastrophic NYU forgetting. |
 | V8 | EfficientViT-B1 | DA3-Large | 0.592 m | — | 2.266 m | Mixed NYU + LILocBench from V5 | Failed: mixing made corridor *worse* than V5. Domain gap not bridged by naive mixing. |
-| **V9** | EfficientViT-B1 | DA3-Large | 1.553 m | **0.382 m** | 1.589 m | V6 → LILocBench fine-tune | **Best corridor specialist.** Used in paper Gazebo experiments. |
+| **V9** | EfficientViT-B1 | DA3-Large | 1.553 m | **0.382 m** | 1.589 m | V6 → LILocBench fine-tune | **Best corridor specialist.** Used in the closed-loop Gazebo experiments. |
 
-Recipe details and per-version provenance are in [`changelog.tex`](changelog.tex) (4 220 lines, versioned alongside the code) and the obsidian project vault (separate repo).
+Recipe details and per-version provenance are on the [model lineage page](https://nishant-zfyii.github.io/ml_inference/models/) of the project blog. Each version (V1 through V9) has a dedicated page documenting the configuration change, the experimental outcome, and the design rationale.
 
 **When to use which checkpoint:**
 - **V5** — best general-purpose indoor student (NYU 0.572 m, balanced).
 - **V6** — best NYU depth (0.519 m), recommended pretraining base for further specialisation.
-- **V9** — best corridor specialist on LILocBench (0.382 m), used in the paper's Gazebo closed-loop experiments. Pays for it with NYU forgetting (1.553 m).
+- **V9** — best corridor specialist on LILocBench (0.382 m), used in the closed-loop Gazebo experiments. Pays for it with NYU forgetting (1.553 m).
 - **DA3-Small (foundation)** — used as the production runtime model on the Jetson, zero-shot. The V-series students complement it; they don't replace it.
 
 ---
 
 ## Results
 
-Numbers below are reproduced from the paper's `paper_stats.json` and the per-experiment JSON files in [`results/`](results/). Every row has an `n` and a 95 % CI in source; only the headline is shown here.
+Numbers below are reproduced from `paper_stats.json` and the per-experiment JSON files in [`results/`](results/). Every row has an `n` and a 95 % CI in the source files; only the headline is shown here.
 
-### DA3-Small zero-shot on NYU val (paper Table VII teacher row)
+### DA3-Small zero-shot on NYU val (Table VII, teacher row)
 
 | Metric | Value | n |
 |---|---|---|
@@ -125,7 +125,7 @@ Sensor RMSE is zero by construction — sensor pixels are the "ground truth" aga
 
 DA3-Small dominates V9 on this metric. V9 wins the *corridor specialist* benchmark on LILocBench (above) but is not the right pick for general per-pixel accuracy.
 
-### Costmap recovery (paper Table III, n = 459 frames)
+### Costmap recovery (Table III, n = 459 frames)
 
 | Config | IoU | Detection rate (%) | FPR (%) | Inflation radius (m) | Timing (ms) |
 |---|---|---|---|---|---|
@@ -136,7 +136,7 @@ DA3-Small dominates V9 on this metric. V9 wins the *corridor specialist* benchma
 | A5 (L+D, large inflation) | 0.379 | 100.0 | 5.2 | 0.192 | 206.2 |
 | A6 (L+D, conservative) | 0.279 | 76.7 | 5.2 | 0.197 | 189.9 |
 
-Source: `results/costmap_ablation/corridor/summary.json`. Headline elsewhere in the paper: **L → L+D adds +55 % occupied cells** in narrow corridors (2 295 → 3 546 mean occupied; `paper_stats.json:table_iv`).
+Source: `results/costmap_ablation/corridor/summary.json`. Headline result: **L → L+D adds +55 % occupied cells** in narrow corridors (2 295 → 3 546 mean occupied; `paper_stats.json:table_iv`).
 
 <img src="assets/lilocbench_panel.png" alt="LILocBench dynamics_0: RGB, LiDAR-only costmap, LiDAR+depth costmap" width="92%"/>
 
@@ -160,7 +160,7 @@ The 5.2 % FPR in the L+D configuration is not free. Decomposition (`results/fpr_
 
 Other things you should know before quoting numbers from this repo:
 
-1. **The APE / SLAM claim was dropped.** An earlier draft included a localisation table showing 73 % APE improvement (1.23 m vs 4.63 m). It was removed during a March 2026 self-review because the bags were played at different rates between configurations — faster playback artificially flatters localisation. Don't quote APE numbers from `paper_stats.json:table_vi`; the file is preserved for completeness but the result is invalidated. See `Lessons/Lesson - APE Confound.md` in the project vault.
+1. **APE / SLAM evaluation deferred to future work.** A preliminary measurement obtained 73 % APE improvement (1.23 m vs 4.63 m) but used different rosbag playback rates between configurations (1.0× for LiDAR-only, 0.5× for fused-depth to allow inference completion). Slower playback runs SLAM Toolbox loop closure more aggressively, which reduces APE independently of the depth-fusion contribution. The original numbers are retained in `paper_stats.json:table_vi` for traceability but are not cited as a result; matched-playback re-evaluation on the deployment hardware is identified as future work.
 2. **The INT8 calibration set in `export_trt.py` is `np.random.rand(...)`** by default (`export_trt.py:182`). The plumbing is correct; the *quality* of the resulting INT8 engine is not. For deployment INT8, supply `--calib-images <dir>` with real corridor frames.
 3. **`benchmark_jetson.py` reports depth RMSE only**, not segmentation mIoU. The mIoU column is initialised but never populated (`benchmark_jetson.py:150,186`). Latency and depth-RMSE are real; ignore mIoU there.
 4. **V9 is a corridor specialist, not a universal model.** Its NYU val RMSE (1.553 m) is much worse than V5/V6's (0.572 / 0.519 m). Specialisation is real and useful, but it is *not* a strictly better model.
@@ -201,7 +201,7 @@ sbatch ml_pipeline/teacher_infer/teacher_infer.slurm
 # Train V4-V9-style student
 sbatch ml_pipeline/train.slurm
 
-# Distillation eval (paper Table IV equivalent)
+# Distillation eval (Table IV equivalent)
 python eval_distillation.py \
     --checkpoint $SCRATCH/checkpoints/best.pt \
     --manifest   $SCRATCH/nyu_teacher_data/manifest.jsonl
@@ -242,7 +242,6 @@ The engine then plugs into `Student TRT Node` in `NCHSB`.
 ```
 ml_inference/
 ├── README.md                       ← this file
-├── changelog.tex                   ← versioned dev log (V1 → V9 + reviewer responses)
 ├── config.py                       ← central Config dataclass
 ├── requirements.txt                ← Python deps
 ├── setup_hpc.sh                    ← one-time HPC env setup
@@ -314,7 +313,7 @@ ml_inference/
 │   ├── teacher_infer.slurm         ← SLURM for NYU teachers
 │   └── teacher_infer_tum.slurm     ← SLURM for TUM teachers
 │
-├── results/                        ← Versioned paper-rigor outputs
+├── results/                        ← Versioned evaluation outputs
 │   ├── paper_stats.json            ← Aggregated Tables III–VI
 │   ├── nyu_da3_da3-small_val.json  ← DA3-Small NYU eval
 │   ├── pixel_fusion.json           ← Per-frame fusion comparison
@@ -348,24 +347,28 @@ ml_inference/
 
 ## Docker reproducibility
 
-The fastest path from clone to results. Model weights and evaluation data are volume-mounted, not baked into the image.
+The fastest path from clone to results. Verified end-to-end on 2026-05-10 — `docker build`, `smoke-test`, and `eval-corridor` (459 frames, V9, CPU) all pass. The full verification log lives in [`docs/docker.md`](docs/docker.md).
+
+Model weights and evaluation data are volume-mounted, not baked into the image. Image is ~6.3 GB (PyTorch wheel dominates).
 
 ```bash
-# Build
-docker compose build
+# Build — pass --network=host on networks with restricted DNS (e.g. NYU campus)
+docker build --network=host -t ml-inference .
 
-# Smoke test (no data needed — verifies model forward pass)
-docker compose run smoke-test
+# Smoke test (no data needed)
+docker compose run --rm smoke-test
+# → Model forward pass OK: depth (1, 1, 240, 320), seg (1, 6, 240, 320)
 
-# Corridor depth evaluation (needs weights + eval data)
-docker compose run eval-corridor
+# Corridor depth evaluation (~3 min CPU on 459 frames)
+docker compose run --rm eval-corridor
+# → RMSE 1.366 m, sensor dead-pixel rate 79.7%
 
-# Calibration sensitivity experiment (reviewer response)
-docker compose run calibration
+# Calibration sensitivity experiment
+docker compose run --rm calibration
 
 # Demo videos and grid comparisons
-docker compose run demo-videos
-docker compose run grid-videos
+docker compose run --rm demo-videos
+docker compose run --rm grid-videos
 ```
 
 | Service | What it runs | GPU needed |
@@ -383,7 +386,7 @@ For GPU passthrough: `docker compose run demo-videos-gpu` (requires [NVIDIA Cont
 
 ## Engineering blog
 
-The [project blog](https://nishant-zfyii.github.io/ml_inference/) walks through each component in long-form: the training lineage (why V1 failed at 75 m RMSE and how nine iterations got to 0.382 m), the costmap ablation protocol, the reviewer-requested calibration sensitivity experiment, deployment gotchas on the Jetson, and the demo video generation pipeline. If the README is the reference card, the blog is the design journal.
+The [project blog](https://nishant-zfyii.github.io/ml_inference/) walks through each component in long-form: the [model lineage](https://nishant-zfyii.github.io/ml_inference/models/) with one page per training configuration (V1 through V9, what changed and why), the [architecture diagrams](https://nishant-zfyii.github.io/ml_inference/architecture) (training, student, runtime fusion as Mermaid), the [costmap ablation](https://nishant-zfyii.github.io/ml_inference/evaluation), the [calibration sensitivity study](https://nishant-zfyii.github.io/ml_inference/calibration), [deployment notes](https://nishant-zfyii.github.io/ml_inference/deployment) for the Jetson runtime, the [demo video generation pipeline](https://nishant-zfyii.github.io/ml_inference/videos), and a [decisions log](https://nishant-zfyii.github.io/ml_inference/decisions) documenting the relationship between the formal specification and the deployment realization. The README is the reference card; the blog is the technical journal.
 
 ---
 
@@ -418,7 +421,7 @@ git checkout v1-v3-baseline
 
 ## Acknowledgements
 
-- **Vivekananda Swamy Mattam** — ROS 2 stack, hardware integration, training pipeline V3 onward, paper writing.
+- **Vivekananda Swamy Mattam** — ROS 2 stack, hardware integration, training pipeline V3 onward, technical writing.
 - **Nishant Pushparaju** — EfficientViT-B1 backbone (V4 turning point), HPC training infrastructure, Gazebo closed-loop validation, Jetson deployment.
 - **Prof. Aliasghar Arab** — faculty advisor, NYU Tandon MAE.
 - **NYU HPC** for compute on the Torch cluster (`torch_pr_742_general`).

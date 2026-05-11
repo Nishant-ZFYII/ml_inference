@@ -1,0 +1,36 @@
+%% V3 vs V4 encoder architecture comparison
+%% Render via https://mermaid.live → export SVG → save as v4-encoder-comparison.svg
+flowchart TB
+    subgraph V3enc["V3: MobileNetV3-Small (~1.5 × 10⁶ params)"]
+        direction TB
+        M_IN["Input [B, 3, 240, 320]"]
+        M1["Stage 1: 16 ch (H/2)"]
+        M2["Stage 2: 24 ch (H/4)"]
+        M3["Stage 3: 40 ch (H/8)"]
+        M4["Stage 4: 96 ch (H/16)"]
+        M_IN --> M1 --> M2 --> M3 --> M4
+        M_NOTE["Pure depthwise-separable convolution<br/>Receptive field grows linearly with depth<br/>Limited capacity for long-range structure"]
+        M4 -.-> M_NOTE
+    end
+
+    subgraph V4enc["V4: EfficientViT-B1 (5.31 × 10⁶ params)"]
+        direction TB
+        E_IN["Input [B, 3, 240, 320]"]
+        E1["Stage 1: 40 ch (H/2)<br/>+ multi-head attention"]
+        E2["Stage 2: 80 ch (H/4)<br/>+ multi-head attention"]
+        E3["Stage 3: 160 ch (H/8)<br/>+ multi-head attention"]
+        E4["Stage 4: 256 ch (H/16)<br/>+ multi-head attention"]
+        E_IN --> E1 --> E2 --> E3 --> E4
+        E_NOTE["Hybrid attention-convolution<br/>Linear-complexity attention<br/>Captures long-range dependencies<br/>(corridor lines, perspective)"]
+        E4 -.-> E_NOTE
+    end
+
+    V3RES["NYU val RMSE: 1.160 m<br/>NYU val mIoU: 39.3 %"]
+    V4RES["NYU val RMSE: 0.774 m (−33 %)<br/>NYU val mIoU: 51.0 % (+11.7 pp)"]
+    V3enc -.->|"trained with V3 recipe"| V3RES
+    V4enc -.->|"same V3 recipe, encoder swap"| V4RES
+
+    style V3enc fill:#fde2e2
+    style V4enc fill:#d4e7c5
+    style V3RES fill:#fde2e2
+    style V4RES fill:#d4e7c5

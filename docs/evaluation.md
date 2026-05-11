@@ -5,7 +5,7 @@ title: Evaluation
 
 # Evaluation
 
-Every number in the paper traces back to a JSON file in `results/`. This page walks through each evaluation protocol, explains what it measures, and documents the gotchas that matter for reproducibility.
+Every reported number in this work traces back to a JSON file in `results/`. This page documents each evaluation protocol, what it measures, and the methodological details required for reproduction.
 
 ---
 
@@ -29,9 +29,11 @@ The core depth comparison: how accurately does each model predict metric depth, 
 | V7 student | 0.589 m | 0.331 m | 0.108 | 47.2% |
 | V9 student | 1.418 m | 0.892 m | 0.291 | 17.2% |
 
+> **Verification note (2026-05-10):** running V9 raw (uncalibrated, no median-scale alignment) inside the Docker container on the same 459 frames gives RMSE 1.366 m / MAE 0.929 m / AbsRel 1.457 / δ<1.25 13.5 %. The 1.418 m number above is with median scaling, which improves absolute scale but not per-pixel accuracy. Both numbers are reported transparently: the table reports the calibration-aligned metric used in formal evaluation, and the Docker number is the raw model output. See [calibration](calibration) for the full sensitivity analysis.
+
 DA3-Small dominates on per-pixel accuracy. This is expected — DA3-Small is a 300M-parameter foundation model running zero-shot, while V9 is a 5.31M-parameter specialist trained on a different corridor benchmark. V9 wins on LILocBench RMSE (0.382 m vs DA3's ~0.5 m), but on our Femto Bolt corridor, the foundation model is stronger per-pixel.
 
-The paper's argument is not that V9 beats DA3 on raw depth accuracy. It is that either model, fused with the surviving ToF pixels, produces a costmap dense enough to navigate — and that the student model is small enough to run alongside DA3 on the Jetson.
+The position this work defends is not that V9 outperforms DA3 on raw per-pixel depth accuracy. It is that either model, fused with the surviving ToF pixels, produces a costmap dense enough to navigate, and that the student model is small enough to run alongside DA3-Small on the deployment hardware.
 
 Source: `results/pixel_fusion.json`
 
@@ -52,7 +54,7 @@ Source: `results/nearrange_safety.json`
 
 ---
 
-## Costmap ablation (paper Table III)
+## Costmap ablation (Table III)
 
 The costmap ablation answers: does adding depth to the LiDAR-only costmap help the robot navigate? We configure Nav2's local costmap under six setups and replay the same corridor bag through each.
 
@@ -78,7 +80,21 @@ The costmap ablation answers: does adding depth to the LiDAR-only costmap help t
 | A5 | 0.379 | 100% | 5.2% | — |
 | A6 | 0.279 | 76.7% | 5.2% | — |
 
-The headline: **L → L+D adds +55% occupied cells** (2,295 → 3,546). The IoU against baseline drops because the additional depth observations fill regions the LiDAR never saw — walls above the scan plane, chair legs, people's torsos. That is new geometry, not noise (mostly).
+The headline: **L → L+D adds +55 % occupied cells** (2,295 → 3,546). The IoU against baseline drops because the additional depth observations fill regions the LiDAR never saw — walls above the scan plane, chair legs, people's torsos. That is new geometry, not noise (mostly).
+
+### LILocBench secondary evaluation
+
+The same costmap-ablation protocol applied to the LILocBench `dynamics_0` corridor split (a different building, different camera, different scan plane height) produces a larger relative recovery:
+
+| Configuration | Mean occupied cells | Δ vs LiDAR-only |
+|---|---|---|
+| L (LiDAR only) | baseline | — |
+| L + D (LiDAR + Depth fusion) | +110 % | corridor depth filling |
+| D only (Depth only, no LiDAR) | +219 % | dense depth dominates the costmap |
+
+LILocBench corridors are taller and narrower than the deployment corridor, so the LiDAR-only baseline is sparser (the scan plane misses more vertical obstacles). Depth fusion therefore contributes more relative volume on LILocBench (+110 %) than on the deployment corridor (+55 %). The D-only configuration (+219 %) is reported for completeness; it is not the recommended deployment configuration because the LiDAR is the more reliable backbone where it can see.
+
+Source: `results/costmap_ablation/lilocbench_dynamics_0/summary.json`.
 
 **The 5.2% false positive rate is real.** Decomposition from `fpr_audit.py`:
 - 49.3% are model hallucinations (predicting depth where nothing exists)

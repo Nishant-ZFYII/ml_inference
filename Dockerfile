@@ -7,14 +7,17 @@
 # Run:     docker run --rm -v $(pwd)/output:/app/output ml-inference
 # GPU:     docker run --rm --gpus all -v $(pwd)/output:/app/output ml-inference
 
-FROM python:3.10-slim
+# Pinned to Bookworm (Debian 12) — Trixie renamed libgl1-mesa-glx → libgl1
+# and breaks the apt-get install line below.
+FROM python:3.10-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# opencv-python-headless does not need libGL; ffmpeg is for video encoding.
+# libglib2.0-0 is needed by some torch / opencv transitive deps.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
     libglib2.0-0 \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*

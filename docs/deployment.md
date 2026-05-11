@@ -65,13 +65,13 @@ The fusion logic in the Depth Fusion Node matches the training target exactly: t
 
 ---
 
-## What the paper says vs what the code does
+## Specification and deployment realization
 
-The paper formulates fusion as affine alignment: \\(d_{metric} = \alpha \cdot d_{pred} + \beta\\), where \\(\alpha, \beta\\) are estimated from a calibration set.
+The formal specification expresses fusion as affine alignment: \\(d_{metric} = \alpha \cdot d_{pred} + \beta\\), where \\(\alpha, \beta\\) are estimated from a calibration set.
 
 The live Depth Fusion Node does not implement affine alignment. It implements confidence-gated substitution: use ToF if valid, use student otherwise. No \\(\alpha\\), no \\(\beta\\), no per-pixel scaling.
 
-This gap is documented in the obsidian vault under "Paper vs Runtime Truth." The distinction matters because the affine formulation is cleaner for the paper's math, while the substitution approach is simpler and more robust at runtime (no risk of a bad calibration multiplying errors across the frame).
+The full mapping between the two implementations lives at [Specification and Deployment Realization](concepts/specification-and-deployment). The affine formulation is the precise mathematical statement used for evaluation; the substitution approach is the embedded realization that achieves the same costmap geometry under the on-vehicle compute and latency budget.
 
 Both approaches arrive at the same costmap: dense depth from a mixture of hardware and learned sources. The evaluation scripts (`run_costmap_ablation.py`) use per-frame median scaling (the affine flavor). The runtime uses substitution. The [Calibration Study](calibration) quantifies the gap.
 

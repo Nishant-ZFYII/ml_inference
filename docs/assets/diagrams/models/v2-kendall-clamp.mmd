@@ -1,0 +1,23 @@
+%% V2 Kendall log-σ² collapse versus clamped behavior
+%% Render via https://mermaid.live → export SVG → save as v2-kendall-clamp.svg
+flowchart TB
+    subgraph Unbounded["Unbounded log σ² (degenerate)"]
+        direction TB
+        U_INIT["Initialization<br/>log σ²_d ≈ 0<br/>log σ²_s ≈ 0"]
+        U_DRIFT["Training drift<br/>log σ²_d → -∞<br/>log σ²_s → +∞"]
+        U_RESULT["Effective behavior<br/>depth gradient → ∞<br/>seg gradient → 0<br/>(seg head untrained)"]
+        U_INIT --> U_DRIFT --> U_RESULT
+    end
+
+    subgraph Clamped["log σ² clamped to [-2, 2]"]
+        direction TB
+        C_INIT["Initialization<br/>log σ²_d ≈ 0<br/>log σ²_s ≈ 0"]
+        C_DRIFT["Bounded drift<br/>log σ²_d ∈ [-2, 2]<br/>log σ²_s ∈ [-2, 2]"]
+        C_RESULT["Effective behavior<br/>both heads receive<br/>finite gradient<br/>(stable training)"]
+        C_INIT --> C_DRIFT --> C_RESULT
+    end
+
+    style Unbounded fill:#fde2e2
+    style Clamped fill:#d4e7c5
+    style U_RESULT fill:#fde2e2
+    style C_RESULT fill:#d4e7c5

@@ -1,0 +1,16 @@
+%% V7 single-domain fine-tuning tradeoff
+%% Render via https://mermaid.live → export SVG → save as v7-finetune-tradeoff.svg
+flowchart TB
+    V5BASE["V5 checkpoint (initialization)<br/>NYU val RMSE: 0.572 m<br/>NYU val mIoU: 63.7 %<br/>(general indoor capability)"]
+
+    V5BASE -->|"continued training, 50 epochs<br/>encoder LR 3 × 10⁻⁵<br/>decoder LR 3 × 10⁻⁴"| FT["LILocBench dynamics_0<br/>~5 × 10³ corridor frames<br/>Intel RealSense D455"]
+
+    FT --> V7["V7 checkpoint"]
+
+    V7 --> CORR_GAIN["Corridor performance<br/>LILocBench D455 RMSE: 0.445 m<br/>Femto Bolt RMSE: 1.982 m<br/>(↓ improvement vs V5)"]
+    V7 --> NYU_LOSS["NYU general capability<br/>NYU val RMSE: 1.315 m (+130 %)<br/>NYU val mIoU: 47.5 % (−16.2 pp)<br/>(↑ catastrophic forgetting)"]
+
+    style V5BASE fill:#e8f0ff
+    style V7 fill:#fff3cd
+    style CORR_GAIN fill:#d4e7c5
+    style NYU_LOSS fill:#fde2e2

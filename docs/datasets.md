@@ -5,7 +5,7 @@ title: Datasets
 
 # Datasets
 
-Every evaluation in the paper runs on one of four frame sets. None of them are large by computer vision standards — the corridor evaluation has 459 frames, and the glass corridor has 121. The project is data-constrained by design: the robot collects data in a single building, and the depth sensor's failure mode is specific to that building's materials.
+Every evaluation in this work runs on one of four frame sets. None of them are large by computer vision standards — the corridor evaluation has 459 frames, and the glass corridor has 121. The data scale is constrained by the project's deployment scope: the robot collects data in a single building, and the depth sensor's failure mode is specific to that building's materials.
 
 ---
 
@@ -95,7 +95,7 @@ The 26-frame gap between RGB (485) and DA3 (459) comes from frames where DA3 inf
 
 ## SUN RGB-D + DIODE
 
-**Usage:** V6 pretraining (diverse indoor/outdoor depth). Not used directly in paper evaluations — only as the pretraining stage before NYU fine-tuning.
+**Usage:** V6 pretraining (diverse indoor / outdoor depth). Not used directly in evaluation — only as the pretraining-stage corpus prior to NYU fine-tuning.
 
 ---
 

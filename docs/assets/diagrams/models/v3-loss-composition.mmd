@@ -1,0 +1,23 @@
+%% V3 multi-task loss composition with Kendall weighting
+%% Render via https://mermaid.live → export SVG → save as v3-loss-composition.svg
+flowchart TB
+    INPUTS["Forward-pass outputs and targets<br/>RGB input, predicted depth, predicted seg logits<br/>Hybrid depth target (DA3 where available, else ToF)<br/>6-class segmentation ground truth (ignore_index = 255)"]
+
+    INPUTS --> BERHU["berHu loss (depth)<br/>L1 if |e| ≤ c<br/>(e² + c²) / 2c if |e| > c<br/>c = 0.2 · max|e| per batch"]
+    INPUTS --> CE["Cross-entropy loss (segmentation)<br/>standard reduction over valid pixels"]
+    INPUTS --> EDGE["Edge-aware smoothness (regularizer)<br/>|∇d_pred| · exp(-|∇RGB|)"]
+
+    BERHU --> KENDALL
+    CE --> KENDALL
+    EDGE --> KENDALL
+
+    KENDALL["Kendall multi-task weighting + edge regularizer<br/>0.5 · exp(-log σ_d) · L_depth + 0.5 · log σ_d<br/>+ exp(-log σ_s) · L_seg + 0.5 · log σ_s<br/>+ λ_edge · L_edge<br/>(log σ clamped to [-2, 2], λ_edge = 0.1)"]
+
+    KENDALL --> TOTAL["Total scalar loss<br/>(backpropagated via AdamW)"]
+
+    style INPUTS fill:#f5f5f5
+    style BERHU fill:#e8f0ff
+    style CE fill:#e8f0ff
+    style EDGE fill:#e8f0ff
+    style KENDALL fill:#fff3cd
+    style TOTAL fill:#d4e7c5

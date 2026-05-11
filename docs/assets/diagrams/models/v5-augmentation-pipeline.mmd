@@ -1,0 +1,34 @@
+%% V5 augmentation pipeline (training-time)
+%% Render via https://mermaid.live → export SVG → save as v5-augmentation-pipeline.svg
+flowchart TB
+    INPUT["Input frame<br/>(NYU Depth V2)"]
+    INPUT --> RGB["RGB tensor"]
+    INPUT --> TARGETS["Aligned targets:<br/>depth, segmentation,<br/>confidence, DA3 depth"]
+
+    RGB --> FLIP{"Horizontal flip<br/>(p = 0.5)"}
+    TARGETS --> FLIP_T{"Flip identically"}
+    FLIP -->|"flip applied"| FLIP_T
+
+    FLIP --> JITTER["ColorJitter<br/>brightness ± 0.2<br/>contrast ± 0.2<br/>saturation ± 0.2<br/>hue ± 0.1"]
+    JITTER --> SIZE_CHECK{"Source dims<br/>> target?"}
+
+    SIZE_CHECK -->|"yes"| RAND_CROP["Random crop<br/>240 × 320"]
+    SIZE_CHECK -->|"no"| RESIZE["Bilinear resize<br/>240 × 320"]
+
+    FLIP_T --> CROP_T{"Crop identically"}
+    RAND_CROP --> CROP_T
+    CROP_T --> RESIZED_T["Targets resized<br/>240 × 320"]
+
+    RAND_CROP --> NORM["ImageNet normalization<br/>(within forward pass)"]
+    RESIZE --> NORM
+
+    NORM --> MODEL["EfficientViT-B1<br/>+ dual-head decoder"]
+    RESIZED_T --> LOSS["Multi-task loss<br/>(berHu + CE + edge,<br/>Kendall-weighted)"]
+    MODEL --> LOSS
+
+    style FLIP fill:#fff3cd
+    style JITTER fill:#fff3cd
+    style RAND_CROP fill:#fff3cd
+    style RESIZE fill:#fff3cd
+    style MODEL fill:#e8f0ff
+    style LOSS fill:#d4e7c5

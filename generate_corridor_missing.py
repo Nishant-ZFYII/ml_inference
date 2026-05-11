@@ -122,12 +122,7 @@ def process_one_model(model_key, frames, device):
                                 interpolation=cv2.INTER_NEAREST)
         valid = ((sensor > MIN_DEPTH) & (sensor < MAX_DEPTH) & ~np.isnan(sensor))
 
-        sensor_model = cv2.resize(sensor, (MODEL_W, MODEL_H),
-                                  interpolation=cv2.INTER_NEAREST)
-        valid_model = ((sensor_model > MIN_DEPTH) & (sensor_model < MAX_DEPTH)
-                       & ~np.isnan(sensor_model))
-
-        # Inference
+        # Inference at model resolution, then upscale
         rgb_pil = Image.open(str(frame["rgb_path"])).convert("RGB")
         rgb_small = rgb_pil.resize((MODEL_W, MODEL_H), Image.BILINEAR)
         rgb_np = np.array(rgb_small, dtype=np.float32) / 255.0
@@ -136,14 +131,23 @@ def process_one_model(model_key, frames, device):
             pred, _ = model(rgb_t)
         pred_model = pred.squeeze().cpu().numpy()
         del rgb_t, pred
-        pred_valid = (pred_model > 0.01) & (pred_model < 8.0)
 
-        # Shared range for this frame
+        pred_native = cv2.resize(pred_model, (native_w, native_h),
+                                 interpolation=cv2.INTER_LINEAR)
+        # Median-scale against sensor at native resolution
+        p_valid = pred_native[valid]
+        g_valid = sensor[valid]
+        if len(p_valid) > 0 and np.median(p_valid) > 1e-8:
+            scale = np.median(g_valid) / np.median(p_valid)
+            pred_native = pred_native * scale
+        pred_v_nat = (pred_native > 0.01) & (pred_native < 8.0)
+
+        # Shared range at native resolution
         all_vals = []
-        if valid_model.any():
-            all_vals.append(sensor_model[valid_model])
-        if pred_valid.any():
-            all_vals.append(pred_model[pred_valid])
+        if valid.any():
+            all_vals.append(sensor[valid])
+        if pred_v_nat.any():
+            all_vals.append(pred_native[pred_v_nat])
         if all_vals:
             combined = np.concatenate(all_vals)
             vmin = max(0.0, float(np.percentile(combined, 2)))
@@ -151,11 +155,6 @@ def process_one_model(model_key, frames, device):
             vmax = max(vmax, vmin + 0.3)
         else:
             vmin, vmax = 0.0, 4.0
-
-        # Upscale prediction to native
-        pred_native = cv2.resize(pred_model, (native_w, native_h),
-                                 interpolation=cv2.INTER_LINEAR)
-        pred_v_nat = (pred_native > 0.01) & (pred_native < 8.0)
 
         # Model-only video
         vis = colorize_depth(pred_native, pred_v_nat, vmin, vmax)

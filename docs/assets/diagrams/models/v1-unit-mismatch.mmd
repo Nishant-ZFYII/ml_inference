@@ -1,0 +1,23 @@
+%% V1 unit-space mismatch
+%% Render via https://mermaid.live → export SVG → save as v1-unit-mismatch.svg in this directory
+flowchart LR
+    RGB["RGB frame<br/>NYU Depth V2"] --> DA2["DA2-Large teacher<br/>(relative depth)"]
+    DA2 --> RELDEPTH["Predicted depth<br/>values ∈ [0, 1]<br/>(normalized)"]
+
+    RGB -.-> STUDENT["MobileNetV3-Small student"]
+    STUDENT --> SPRED["Student prediction<br/>values ∈ [0, 1]"]
+
+    RELDEPTH --> LOSS["MSE loss"]
+    SPRED --> LOSS
+    LOSS --> OPT["AdamW optimizer<br/>(unaware of unit space)"]
+    OPT -.-> STUDENT
+
+    GT["NYU ground truth<br/>values ∈ [0.1, 6.0] m<br/>(metric)"] --> EVAL["Evaluation metric<br/>RMSE in meters"]
+    SPRED --> EVAL
+    EVAL --> RESULT["RMSE = 75.37 m"]
+
+    style DA2 fill:#fde2e2
+    style RELDEPTH fill:#fde2e2
+    style GT fill:#e8f0ff
+    style EVAL fill:#fff3cd
+    style RESULT fill:#fde2e2

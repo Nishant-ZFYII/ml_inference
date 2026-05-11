@@ -1,0 +1,61 @@
+# Build context size control — without this, ~5+ GB of data leaks into the image build.
+
+# Large data dirs (must be volume-mounted, not baked in)
+data/
+corridor_data/
+corridor_eval_data/
+corridor_eval_data.tar.gz
+lilocbench_extracted/
+*.tar.gz
+
+# Model weights and training outputs (volume-mounted via docker-compose)
+hpc_outputs/
+checkpoints/
+exported/
+runs/
+
+# Demo / paper output artifacts
+output/
+demo_videos/
+hpc_outputs/*.out
+hpc_outputs/*.err
+
+# Python noise
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Editor / OS noise
+.vscode/
+.idea/
+.cache/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Git internals (Docker doesn't need them)
+.git/
+.gitignore
+
+# Docs site (not needed at runtime)
+docs/
+assets/
+
+# Slurm logs and HPC artifacts
+*.out
+*.err
+slurm-*.out
+
+# Archive of old V1-V3 codebase (separate reproducibility path)
+archive/
+
+# Misc large files
+map.pgm
+map.yaml
+*.mp4
+*.avi
+*.gif

@@ -183,23 +183,15 @@ def load_bag_213831_frames():
 
 # ── Video writer ─────────────────────────────────────────────────────
 
-def write_video(path, frame_list, fps=FPS):
-    if not frame_list:
-        print(f"  [SKIP] No frames for {path}")
-        return
-    h, w = frame_list[0].shape[:2]
+def open_writer(path, w, h, fps=FPS):
     fourcc = cv2.VideoWriter_fourcc(*"XVID")
     out_path = path.with_suffix(".avi")
     writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h), isColor=True)
     if not writer.isOpened():
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out_path = path.with_suffix(".mp4")
+        out_path = out_path.with_suffix(".mp4")
         writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h), isColor=True)
-    for f in frame_list:
-        writer.write(f)
-    writer.release()
-    size_mb = out_path.stat().st_size / 1e6
-    print(f"  Wrote {out_path.name} ({len(frame_list)} frames, {w}x{h}, {size_mb:.1f} MB)")
+    return writer, out_path
 
 
 # ── Main pipeline ────────────────────────────────────────────────────
@@ -217,37 +209,38 @@ def infer_student(model, rgb_path, device):
 
 def process_dataset(frames, dataset_name, output_dir, models_to_run,
                     student_models=None, device=None):
+    """Stream-based: opens all VideoWriters up front, writes each frame
+    immediately, never buffers more than one frame per video in memory."""
     output_dir = Path(output_dir) / dataset_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if student_models is None:
         student_models = {}
 
-    video_buffers = {}
-
-    always_keys = ["rgb", "sensor_depth"]
-    for k in always_keys:
-        video_buffers[k] = []
-
+    active_keys = ["rgb", "sensor_depth"]
     if "da3" in models_to_run or "all" in models_to_run:
-        video_buffers["da3"] = []
-        video_buffers["fused_sensor_da3"] = []
-
+        active_keys += ["da3", "fused_sensor_da3"]
     for m in ["v5", "v6", "v7", "v9"]:
         if m in models_to_run or "all" in models_to_run:
-            video_buffers[m] = []
-            video_buffers[f"fused_sensor_{m}"] = []
+            active_keys += [m, f"fused_sensor_{m}"]
 
     n = len(frames)
     print(f"\nProcessing {dataset_name}: {n} frames, models={models_to_run}")
 
     native_h, native_w = None, None
+    writers = {}
+    writer_paths = {}
+    frame_counts = {k: 0 for k in active_keys}
 
     for i, frame in enumerate(frames):
         rgb_bgr = cv2.imread(str(frame["rgb_path"]))
         if native_h is None:
             native_h, native_w = rgb_bgr.shape[:2]
             print(f"  Native resolution: {native_w}x{native_h}")
+            for k in active_keys:
+                w, p = open_writer(output_dir / k, native_w, native_h)
+                writers[k] = w
+                writer_paths[k] = p
 
         if rgb_bgr.shape[:2] != (native_h, native_w):
             rgb_bgr = cv2.resize(rgb_bgr, (native_w, native_h))
@@ -262,113 +255,123 @@ def process_dataset(frames, dataset_name, output_dir, models_to_run,
                         & ~np.isnan(sensor_native))
         dead_pct = (~valid_native).sum() * 100.0 / sensor_native.size
 
-        sensor_model = cv2.resize(sensor_native, (MODEL_W, MODEL_H),
-                                  interpolation=cv2.INTER_NEAREST)
-        valid_model = ((sensor_model > MIN_DEPTH) & (sensor_model < MAX_DEPTH)
-                       & ~np.isnan(sensor_model))
+        depth_sources_native = [(sensor_native, valid_native)]
 
-        depth_sources_model = [(sensor_model, valid_model)]
-
-        # ── DA3 ──
+        # ── DA3 (processed at native resolution) ──
         da3_native = None
+        da3_valid_native = None
         da3_path = frame.get("da3_path")
-        if da3_path and Path(da3_path).exists() and "da3" in video_buffers:
+        if da3_path and Path(da3_path).exists() and "da3" in writers:
             da3_raw = np.load(str(da3_path))
-            da3_model = cv2.resize(da3_raw, (MODEL_W, MODEL_H),
-                                   interpolation=cv2.INTER_LINEAR)
-            da3_model = median_scale(da3_model, sensor_model, valid_model)
-            da3_valid_model = (da3_model > 0.05) & (da3_model < 8.0)
-            depth_sources_model.append((da3_model, da3_valid_model))
-            da3_native = upscale_depth(da3_model, native_h, native_w)
+            if da3_raw.shape != (native_h, native_w):
+                da3_raw = cv2.resize(da3_raw, (native_w, native_h),
+                                     interpolation=cv2.INTER_LINEAR)
+            da3_native = median_scale(da3_raw, sensor_native, valid_native)
+            da3_valid_native = (da3_native > 0.05) & (da3_native < 8.0)
+            depth_sources_native.append((da3_native, da3_valid_native))
 
         # ── Student models (V5, V6, V7) ──
-        # Use pre-computed .npy if available, otherwise live inference
         student_native = {}
         for mk in ["v5", "v6", "v7"]:
-            if mk not in video_buffers:
+            if mk not in writers:
                 continue
             key = f"{mk}_path"
             has_precomputed = (key in frame and frame[key]
                                and Path(frame[key]).exists())
             if has_precomputed:
                 pred = np.load(str(frame[key]))
-                pred_model = cv2.resize(pred, (MODEL_W, MODEL_H),
-                                        interpolation=cv2.INTER_LINEAR)
+                if pred.shape != (native_h, native_w):
+                    pred_nat = cv2.resize(pred, (native_w, native_h),
+                                          interpolation=cv2.INTER_LINEAR)
+                else:
+                    pred_nat = pred
             elif mk in student_models:
                 pred_model = infer_student(
                     student_models[mk], frame["rgb_path"], device)
+                pred_nat = upscale_depth(pred_model, native_h, native_w)
             else:
                 continue
-            pred_valid_model = (pred_model > 0.01) & (pred_model < 8.0)
-            depth_sources_model.append((pred_model, pred_valid_model))
-            student_native[mk] = upscale_depth(pred_model, native_h, native_w)
+            pred_nat = median_scale(pred_nat, sensor_native, valid_native)
+            pred_valid_nat = (pred_nat > 0.01) & (pred_nat < 8.0)
+            depth_sources_native.append((pred_nat, pred_valid_nat))
+            student_native[mk] = pred_nat
 
         # ── V9 (always live inference) ──
         v9_native = None
-        if "v9" in video_buffers and "v9" in student_models:
+        if "v9" in writers and "v9" in student_models:
             v9_model = infer_student(
                 student_models["v9"], frame["rgb_path"], device)
-            v9_valid_model = (v9_model > 0.01) & (v9_model < 8.0)
-            depth_sources_model.append((v9_model, v9_valid_model))
-            v9_native = upscale_depth(v9_model, native_h, native_w)
+            v9_nat = upscale_depth(v9_model, native_h, native_w)
+            v9_nat = median_scale(v9_nat, sensor_native, valid_native)
+            v9_valid_nat = (v9_nat > 0.01) & (v9_nat < 8.0)
+            depth_sources_native.append((v9_nat, v9_valid_nat))
+            v9_native = v9_nat
 
-        vmin, vmax = compute_shared_range(depth_sources_model)
+        vmin, vmax = compute_shared_range(depth_sources_native)
 
-        # ── Write frames at native resolution ──
+        # ── Stream frames directly to writers ──
 
-        video_buffers["rgb"].append(
-            add_label(rgb_bgr, f"RGB  [{i+1}/{n}]"))
+        writers["rgb"].write(add_label(rgb_bgr, f"RGB  [{i+1}/{n}]"))
+        frame_counts["rgb"] += 1
 
         sensor_color = colorize_depth(sensor_native, valid_native, vmin, vmax)
-        video_buffers["sensor_depth"].append(
+        writers["sensor_depth"].write(
             add_label(sensor_color, f"Sensor Depth ({dead_pct:.0f}% dead)"))
+        frame_counts["sensor_depth"] += 1
 
-        if da3_native is not None and "da3" in video_buffers:
-            da3_valid_nat = (da3_native > 0.05) & (da3_native < 8.0)
-            da3_color = colorize_depth(da3_native, da3_valid_nat, vmin, vmax)
-            video_buffers["da3"].append(
+        if da3_native is not None and "da3" in writers:
+            da3_color = colorize_depth(da3_native, da3_valid_native, vmin, vmax)
+            writers["da3"].write(
                 add_label(da3_color, "DA3-Small (median-scaled)"))
+            frame_counts["da3"] += 1
 
             fused = fuse_depth(sensor_native, da3_native, valid_native)
-            fused_v = valid_native | da3_valid_nat
-            video_buffers["fused_sensor_da3"].append(
+            fused_v = valid_native | da3_valid_native
+            writers["fused_sensor_da3"].write(
                 add_label(colorize_depth(fused, fused_v, vmin, vmax),
                           "Fused (Sensor + DA3)"))
+            frame_counts["fused_sensor_da3"] += 1
 
         label_map = {"v5": "V5 Student", "v6": "V6 Student", "v7": "V7 Student"}
         for mk in ["v5", "v6", "v7"]:
-            if mk in student_native and mk in video_buffers:
+            if mk in student_native and mk in writers:
                 pred_nat = student_native[mk]
                 pred_v = (pred_nat > 0.01) & (pred_nat < 8.0)
-                video_buffers[mk].append(
+                writers[mk].write(
                     add_label(colorize_depth(pred_nat, pred_v, vmin, vmax),
                               label_map[mk]))
+                frame_counts[mk] += 1
 
                 fused = fuse_depth(sensor_native, pred_nat, valid_native)
                 fused_v = valid_native | pred_v
-                video_buffers[f"fused_sensor_{mk}"].append(
+                writers[f"fused_sensor_{mk}"].write(
                     add_label(colorize_depth(fused, fused_v, vmin, vmax),
                               f"Fused (Sensor + {label_map[mk]})"))
+                frame_counts[f"fused_sensor_{mk}"] += 1
 
-        if v9_native is not None and "v9" in video_buffers:
-            v9_valid_nat = (v9_native > 0.01) & (v9_native < 8.0)
-            video_buffers["v9"].append(
-                add_label(colorize_depth(v9_native, v9_valid_nat, vmin, vmax),
+        if v9_native is not None and "v9" in writers:
+            v9_v = (v9_native > 0.01) & (v9_native < 8.0)
+            writers["v9"].write(
+                add_label(colorize_depth(v9_native, v9_v, vmin, vmax),
                           "V9 Student (corridor FT)"))
+            frame_counts["v9"] += 1
 
             fused = fuse_depth(sensor_native, v9_native, valid_native)
-            fused_v = valid_native | v9_valid_nat
-            video_buffers["fused_sensor_v9"].append(
+            fused_v = valid_native | v9_v
+            writers["fused_sensor_v9"].write(
                 add_label(colorize_depth(fused, fused_v, vmin, vmax),
                           "Fused (Sensor + V9)"))
+            frame_counts["fused_sensor_v9"] += 1
 
         if (i + 1) % 50 == 0:
             print(f"  [{i+1}/{n}] frames processed")
 
-    print(f"\nWriting videos to {output_dir}/")
-    for key, buf in video_buffers.items():
-        if buf:
-            write_video(output_dir / key, buf)
+    for k, w in writers.items():
+        w.release()
+        p = writer_paths[k]
+        sz = p.stat().st_size / 1e6
+        print(f"  Wrote {p.name} ({frame_counts[k]} frames, "
+              f"{native_w}x{native_h}, {sz:.1f} MB)")
 
     print(f"Done: {dataset_name}\n")
 

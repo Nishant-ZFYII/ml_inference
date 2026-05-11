@@ -3,9 +3,44 @@ layout: default
 title: Demo Videos
 ---
 
-# Demo Videos
+# Demo videos
 
 Full-length comparison videos showing every depth source side-by-side across all three evaluation datasets. Generated at native 1280×720 resolution, 10 FPS, with inferno colormap and shared per-frame percentile-based depth range.
+
+---
+
+## Per-version six-panel videos
+
+The recommended way to compare model variants on the corridor evaluation set is the per-version six-panel video sequence, available on each production model's page:
+
+- [V5 — Atlas]({{ '/models/v5-deployment-aug' | relative_url }}#demonstration) (general-purpose model)
+- [V6 — Cornerstone]({{ '/models/v6-sun-diode-pretrain' | relative_url }}#demonstration) (fine-tuning base)
+- [V7 — Tunnel]({{ '/models/v7-lilocbench-finetune' | relative_url }}#demonstration) (corridor specialist initialized from V5)
+- [V9 — Lighthouse]({{ '/models/v9-corridor-specialist' | relative_url }}#demonstration) (production corridor specialist)
+
+Each video shows: RGB input · raw ToF · DA3-Small reference depth · the model's raw inference · ToF+DA3 fusion · ToF+model fusion. The full-length source clips (per-channel `.avi` files) live on the external SSD at `/media/nishant/SeeGayt2/demo_videos/corridor_eval/`. The embedded MP4s on this site are H.264-encoded composites of those sources for browser playback.
+
+---
+
+## Glass corridor
+
+<video controls width="100%" preload="metadata">
+  <source src="{{ '/assets/videos/glass_corridor_combined.mp4' | relative_url }}" type="video/mp4">
+  Your browser does not support the embedded video. <a href="{{ '/assets/videos/glass_corridor_combined.mp4' | relative_url }}">Download MP4</a>.
+</video>
+
+121 frames through a glass-walled section. The DA3 and V5/V6 panels mis-predict the geometry behind the glass (predicting the corridor "ends" at the glass surface). V7 and V9, which were fine-tuned on LILocBench corridor data, see through the glass and predict the actual room depth behind it.
+
+---
+
+## Bag 213831
+
+<video controls width="100%" preload="metadata">
+  <source src="{{ '/assets/videos/bag_213831_combined.mp4' | relative_url }}" type="video/mp4">
+  Your browser does not support the embedded video. <a href="{{ '/assets/videos/bag_213831_combined.mp4' | relative_url }}">Download MP4</a>.
+</video>
+
+150-frame indoor recording outside the LILocBench corridor distribution. V5 and V6 produce smooth depth, V9 produces noticeably more noise (the corridor specialist generalizing poorly to a non-corridor scene). This is the [V9 generalization caveat](models/v9-corridor-specialist#operational-limitations) made visible.
 
 ---
 

@@ -15,3 +15,28 @@ kramdown:
 plugins:
   - jekyll-feed
   - jekyll-seo-tag
+
+# Top nav (minima reads `header_pages` for the site header)
+header_pages:
+  - index.md
+  - architecture.md
+  - hardware.md
+  - models.md
+  - concepts.md
+  - training.md
+  - evaluation.md
+  - calibration.md
+  - deployment.md
+  - decisions.md
+  - datasets.md
+  - videos.md
+  - docker.md
+
+# Per-section ordering (used by minima sidebar / index lookups)
+collections:
+  models:
+    output: true
+    permalink: /:collection/:name
+  concepts:
+    output: true
+    permalink: /:collection/:name

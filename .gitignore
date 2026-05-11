@@ -35,3 +35,9 @@ Thumbs.db
 # HuggingFace cache
 .cache/
 hpc_outputs/
+
+# Jekyll docs site — local build artifacts only, do not commit
+docs/_site/
+docs/.bundle/
+docs/vendor/
+docs/Gemfile.lock

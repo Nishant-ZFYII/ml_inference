@@ -14,9 +14,13 @@
 
 services:
   base: &base
+    image: ml-inference:latest
     build:
       context: .
       dockerfile: Dockerfile
+      # Use host network during build so apt can resolve deb.debian.org
+      # on networks where the bridge nameserver is restricted (e.g. corporate / NYU DNS).
+      network: host
     volumes:
       - ./hpc_outputs:/app/hpc_outputs:ro
       - ./corridor_eval_data:/app/corridor_eval_data:ro

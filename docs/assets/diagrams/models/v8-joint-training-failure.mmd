@@ -1,0 +1,24 @@
+%% V8 joint-domain training and the average-geometry failure mode
+%% Render via https://mermaid.live → export SVG → save as v8-joint-training-failure.svg
+flowchart TB
+    subgraph Sources["Source distributions"]
+        direction LR
+        NYU["NYU Depth V2<br/>Apartment-scale<br/>1–4 m typical depth<br/>Diverse room geometry<br/>Microsoft Kinect"]
+        LIL["LILocBench dynamics_0<br/>Corridor-scale<br/>1–15 m typical depth<br/>Long parallel walls<br/>Intel RealSense D455"]
+    end
+
+    Sources -->|"50 / 50 joint sampling<br/>NYU upsampled to balance"| TRAIN["V5 initialization<br/>+ joint training<br/>50 epochs"]
+
+    TRAIN --> V8["V8 checkpoint"]
+
+    V8 --> NYU_R["NYU val RMSE: 0.592 m<br/>(slight regression vs V5: 0.572 m)<br/>NYU val mIoU: 62.9 %<br/>(comparable to V5: 63.7 %)"]
+    V8 --> COR_R["Femto Bolt corridor RMSE: 2.266 m<br/>(regression vs V5: 2.186 m)<br/>↓ Pareto-dominated by V9: 1.589 m"]
+
+    EXPLAIN["Failure mechanism:<br/>encoder converges to feature<br/>representations approximating<br/>the union of both distributions,<br/>optimally fitting neither"]
+    V8 -.-> EXPLAIN
+
+    style Sources fill:#e8f0ff
+    style TRAIN fill:#fff3cd
+    style V8 fill:#fde2e2
+    style COR_R fill:#fde2e2
+    style EXPLAIN fill:#fff3cd

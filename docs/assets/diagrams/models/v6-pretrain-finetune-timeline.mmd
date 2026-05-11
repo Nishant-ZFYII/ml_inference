@@ -1,0 +1,37 @@
+%% V6 two-stage pretrain → fine-tune training timeline
+%% Render via https://mermaid.live → export SVG → save as v6-pretrain-finetune-timeline.svg
+flowchart TB
+    subgraph Stage1["Stage 1: Multi-domain pretraining"]
+        direction TB
+        SUN["SUN RGB-D<br/>~10 × 10³ frames<br/>(no segmentation labels)"]
+        DIODE["DIODE Indoor<br/>~8 × 10³ frames<br/>(no segmentation labels)"]
+        NYU1["NYU Depth V2<br/>1.159 × 10³ frames<br/>(with 6-class segmentation)"]
+        S1MIX["Combined ~19 × 10³ frames<br/>Segmentation loss skipped<br/>where labels absent"]
+        SUN --> S1MIX
+        DIODE --> S1MIX
+        NYU1 --> S1MIX
+        S1OUT["Job 3093046<br/>38 / 50 epochs<br/>(scheduler termination)"]
+        S1MIX --> S1OUT
+    end
+
+    subgraph Stage2["Stage 2: NYU fine-tuning"]
+        direction TB
+        NYU2["NYU Depth V2<br/>+ V5 augmentation pipeline"]
+        S2OUT["Job 3098656<br/>154 / 200 epochs<br/>(walltime termination)"]
+        NYU2 --> S2OUT
+    end
+
+    Stage1 --> CKPT["V6 pretrain checkpoint<br/>(encoder prior established)"]
+    CKPT --> Stage2
+    Stage2 --> RESULT["V6 final checkpoint<br/>NYU val RMSE: 0.519 m<br/>NYU val mIoU: 48.5 %"]
+
+    FAIL1["Job 3084108<br/>NaN loss<br/>(ignore-index edge case)"]
+    FAIL2["Job 3088530<br/>GPU utilization kill<br/>(dataloader bottleneck)"]
+    FAIL1 -.->|"informed loss-function fix"| Stage1
+    FAIL2 -.->|"informed dataloader profiling"| Stage1
+
+    style Stage1 fill:#e8f0ff
+    style Stage2 fill:#fff3cd
+    style RESULT fill:#d4e7c5
+    style FAIL1 fill:#fde2e2
+    style FAIL2 fill:#fde2e2
