@@ -26,7 +26,7 @@ The position this work defends, in one sentence: **monocular depth alone cannot 
 |---|---|
 | [Architecture](architecture) | Mermaid diagrams: two-repo split, student model, runtime fusion (with median-scale calibration), training loss |
 | [Concepts](concepts/) | Bootstrap perception, scale calibration, confidence-gated fusion, four-layer sensing, specification and deployment, knowledge distillation — the ideas the rest of the site assumes |
-| [Hardware](hardware) | Femto Bolt, RPLiDAR S2, Jetson Orin Nano, Traxxas Maxx 4S — the deployment platform |
+| [Hardware](hardware) | Femto Bolt, RPLiDAR A2M8, Jetson Orin Nano, Traxxas Maxx 4S — the deployment platform |
 | [Model lineage (V1 → V9)](models/) | One page per training iteration with what changed, why, results, and verdict |
 | [Training Pipeline](training) | Loss functions, teacher ensemble, the V1-V9 narrative |
 | [Evaluation](evaluation) | Corridor depth metrics, costmap ablation, FPR decomposition |
@@ -94,7 +94,7 @@ Model weights (`hpc_outputs/*.pt`) and evaluation data (`corridor_eval_data/`) a
 
 ## Stack
 
-PyTorch 2.0+ · timm (EfficientViT-B1) · ONNX · TensorRT FP16 · OpenCV-headless · Jetson Orin Nano 8GB · Orbbec Femto Bolt · RPLiDAR S2 · ROS 2 Humble · Nav2 · SLAM Toolbox · NYU Greene HPC (L40S)
+PyTorch 2.0+ · timm (EfficientViT-B1) · ONNX · TensorRT FP16 · OpenCV-headless · Jetson Orin Nano 8GB · Orbbec Femto Bolt · RPLiDAR A2M8 · ROS 2 Humble · Nav2 · SLAM Toolbox · NYU Greene HPC (L40S)
 
 ---
 

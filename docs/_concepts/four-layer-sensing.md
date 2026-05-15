@@ -11,7 +11,7 @@ The architectural pattern that constitutes the principal system-level contributi
 
 | Layer | Sensor / source | What it provides | What it can't see |
 |---|---|---|---|
-| **1. LiDAR (RPLiDAR S2)** | 2D rotating laser scanner | Reliable obstacle distance on one horizontal plane, always works | Anything above or below the scan plane: chairs, tabletops, torsos |
+| **1. LiDAR (RPLiDAR A2M8)** | 2D rotating laser scanner | Reliable obstacle distance on one horizontal plane, always works | Anything above or below the scan plane: chairs, tabletops, torsos |
 | **2. Hardware depth (Femto Bolt ToF)** | Time-of-Flight depth camera | Dense 3D depth where it works | Reflective surfaces (glass, polished floors) — fails on 77.8% of pixels |
 | **3. Learned depth (V9 student)** | EfficientViT-B1 monocular depth | Fills the regions where ToF failed | Has no class information; raw scale needs anchoring |
 | **4. Semantic segmentation (V9 student)** | Same student model, segmentation head | Class-aware costmap inflation (glass gets wider berth than wall) | Only operates on regions visible in the camera FOV |

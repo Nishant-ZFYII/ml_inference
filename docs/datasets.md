@@ -13,7 +13,7 @@ Every evaluation in this work runs on one of four frame sets. None of them are l
 
 **Location:** `ml_pipeline/corridor_eval_data/`
 
-**Source:** Orbbec Femto Bolt RGB-D + RPLiDAR S2, recorded on the Traxxas Maxx 4S platform in a university corridor. The original rosbag (`rgbd_imu_20260228_003828_0.mcap`, ~8.1 GB) was recorded at 30 FPS; frames were subsampled to ~3 FPS for evaluation.
+**Source:** Orbbec Femto Bolt RGB-D + RPLiDAR A2M8, recorded on the Traxxas Maxx 4S platform in a university corridor. The original rosbag (`rgbd_imu_20260228_003828_0.mcap`, ~8.1 GB) was recorded at 30 FPS; frames were subsampled to ~3 FPS for evaluation.
 
 **Contents:**
 

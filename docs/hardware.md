@@ -56,17 +56,16 @@ The driver is the `orbbec_camera` ROS 2 package. Connection is USB 3.0. Camera i
 
 ---
 
-## The LiDAR — RPLiDAR S2
+## The LiDAR — RPLiDAR A2M8
 
 2D rotating laser scanner. The reliable backbone of navigation. Always works, but only sees a single horizontal plane.
 
 | Property | Value |
 |---|---|
-| Range | 18 m |
+| Range | 12 m (specified); deployment is bounded by the corridor scale, not sensor range |
 | Field of view | 360° |
 | Scan rate | ~10 Hz |
-| Scan mode | DenseBoost |
-| Driver | `sllidar_ros2` |
+| Driver | `rplidar_ros` (`ros-humble-rplidar-ros`) |
 | Connection | USB serial @ 1,000,000 baud |
 | Frame | `lidar_link` |
 | Topic | `/scan` (`sensor_msgs/LaserScan`) |
@@ -81,7 +80,7 @@ The LiDAR's limitation isn't quality — it's dimensionality. It sees a thin sli
 
 This is exactly why the Femto Bolt depth and learned depth from the student model are needed — they fill the vertical gap the LiDAR can't see. See [Four-Layer Sensing Hierarchy](concepts/four-layer-sensing).
 
-The mental model: RPLiDAR S2 is the reliable skeleton of the robot's geometry understanding. Bootstrap perception doesn't replace that skeleton. It adds missing body volume where the 2D scan is inherently incomplete.
+The mental model: the RPLiDAR is the reliable skeleton of the robot's geometry understanding. Bootstrap perception doesn't replace that skeleton. It adds missing body volume where the 2D scan is inherently incomplete.
 
 ---
 
@@ -111,7 +110,7 @@ What runs on it:
 USB allocation:
 - USB0 → VESC MINI (drive ESC)
 - USB1 → Teensy 4.1 (steering, encoders)
-- USB2 → RPLiDAR S2
+- USB2 → RPLiDAR A2M8
 - USB3 → Femto Bolt
 
 Runtime perception performance:
